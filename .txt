@@ -1,0 +1,44 @@
+CLIENT
+    Oman@station.gmail.com
+    Good@123
+
+Transporter
+    john34@gmail.com
+    wwe@123
+   
+
+Seller 
+    brock22@gmail.com
+    fast@123
+    SELLER-RANCH-6517
+
+    dipti22@gmail.com
+    Karan@123
+
+Admin 
+    admin@fuelplatform.com
+    admin123
+
+Driver
+    karan11@gmail.com
+    Good@12
+
+
+
+Local....
+
+
+
+CLIENT
+    Jack mahli
+    jack12@gmail.com
+    jack@123
+
+Transporter 
+    Mack mahli  
+    mack23@gmail.com
+    mack@123
+
+Seller  
+    pack44@gmail.com
+    pack@123
