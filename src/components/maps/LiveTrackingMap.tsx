@@ -25,17 +25,42 @@ export type Journey = {
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-const LAND_ROUTE_VIA: [number, number][] = [
-  [23.660000, 58.240000],
-  [23.645000, 58.340000],
-];
-
+/**
+ * Straight depot → destination line. Used only as an instant fallback while the
+ * real road geometry is being fetched (or if the routing service is unreachable).
+ */
 function getRoutePath(depot: Journey['depot'], dest: Journey['dest']): [number, number][] {
   return [
     [depot.lat, depot.lng],
-    ...LAND_ROUTE_VIA,
     [dest.lat, dest.lng],
   ];
+}
+
+/**
+ * Fetch the actual road-following route between two points from the public OSRM
+ * server (same OpenStreetMap road network the tiles are drawn from), so trucks
+ * drive along real highways instead of cutting across the Gulf of Oman.
+ * Returns the path as [lat, lng] pairs, or null if the request fails.
+ */
+async function fetchRoadRoute(
+  depot: Journey['depot'],
+  dest: Journey['dest'],
+): Promise<[number, number][] | null> {
+  try {
+    const url =
+      `https://router.project-osrm.org/route/v1/driving/` +
+      `${depot.lng},${depot.lat};${dest.lng},${dest.lat}` +
+      `?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const coords = data?.routes?.[0]?.geometry?.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2) return null;
+    // OSRM returns [lng, lat]; Leaflet wants [lat, lng].
+    return coords.map((c: [number, number]) => [c[1], c[0]] as [number, number]);
+  } catch {
+    return null;
+  }
 }
 
 function routeLength(path: [number, number][]) {
@@ -112,8 +137,24 @@ export default function LiveTrackingMap({
   const mapRef    = useRef<L.Map | null>(null);
   const depotRef  = useRef<L.Marker | null>(null);
   const layersRef = useRef<Map<string, Layer>>(new Map());
+  const routesRef = useRef<Map<string, [number, number][]>>(new Map());
   const dataRef   = useRef<Journey[]>(journeys);
   dataRef.current = journeys;
+
+  // Fetch the real road route for each journey once, then snap its polyline (and
+  // the truck's path) onto the actual highway geometry.
+  useEffect(() => {
+    journeys.forEach(j => {
+      if (routesRef.current.has(j.id)) return;
+      routesRef.current.set(j.id, getRoutePath(j.depot, j.dest)); // placeholder; prevents refetch
+      fetchRoadRoute(j.depot, j.dest).then(path => {
+        if (!path) return;
+        routesRef.current.set(j.id, path);
+        const layer = layersRef.current.get(j.id);
+        if (layer) layer.line.setLatLngs(path);
+      });
+    });
+  }, [journeys]);
 
   // Create the map once.
   useEffect(() => {
@@ -145,7 +186,7 @@ export default function LiveTrackingMap({
       js.forEach(j => {
         seen.add(j.id);
         const t = progress(j);
-        const route = getRoutePath(j.depot, j.dest);
+        const route = routesRef.current.get(j.id) ?? getRoutePath(j.depot, j.dest);
         const [lat, lng] = routePosition(route, t);
 
         let layer = layersRef.current.get(j.id);
@@ -168,6 +209,7 @@ export default function LiveTrackingMap({
         if (!seen.has(id)) {
           layer.dest.remove(); layer.line.remove(); layer.truck.remove();
           layersRef.current.delete(id);
+          routesRef.current.delete(id);
         }
       });
     };
