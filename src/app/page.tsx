@@ -9,7 +9,7 @@ import {
   getUsers,
   DEMO_PERSONAS,
 } from '@/src/lib/demo-data';
-import OmanLiveMap from '@/src/components/maps/OmanLiveMap';
+import NetworkMap from '@/src/components/maps/NetworkMap';
 
 // ── Hero feature pills ────────────────────────────────────────
 const FEATURE_PILLS = [
@@ -102,10 +102,10 @@ export default function Home() {
   return (
     <div className="h-screen overflow-hidden bg-white flex flex-col">
 
-      {/* ── OMAN MAP BACKGROUND ── */}
+      {/* ── NETWORK GRID BACKGROUND ── */}
       <div className="fixed inset-0 pointer-events-none z-0" aria-hidden>
-        <OmanLiveMap className="absolute inset-0 w-full h-full" />
-        {/* Soft vignette — keeps the centre content readable while the map shows through */}
+        <NetworkMap className="absolute inset-0 w-full h-full" />
+        {/* Soft vignette — keeps the centre content readable while the grid shows through */}
         <div className="absolute inset-0"
           style={{ background: 'radial-gradient(ellipse 72% 64% at 50% 46%, rgba(255,255,255,0.45) 25%, rgba(255,255,255,0.72) 100%)' }} />
       </div>
