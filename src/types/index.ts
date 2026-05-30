@@ -49,8 +49,10 @@ export interface User {
   // Seller onboarding
 sellerCode?: string;
 
-// transporter connection
-connectedSellerIds?: string[];
+  // transporter connection
+  connectedSellerIds?: string[];
+
+  sellerApproved?: boolean;
   phone?: string;
   createdAt?: Date;
 }
@@ -129,6 +131,10 @@ export interface Truck {
 
   sensorConfigured?: boolean;
 
+  sensorIntegrationComplete?: boolean;
+
+  activatedAt?: Date;
+
   createdAt?: Date;
 }
 
@@ -143,13 +149,16 @@ export interface KYCDocument {
   documentType: string;
   documentUrl:  string;
   reviewStatus: KYCStatus;
-  workspaceId:  string;
+  workspaceId?: string;
   uploadedAt:   Date;
   reviewedAt?:  Date;
   reviewedBy?:  string;
 
-  // ✅ Legacy field — kept for backwards compatibility
+  // ✅ Legacy fields — kept for backwards compatibility
   tspUserId?:   string;
+  sellerId?:    string;
+  sellerName?:  string;
+  sellerCode?:  string;
 
   // ✅ Extended fields from detailed KYC upload form
   businessName?:       string;
@@ -314,7 +323,7 @@ truckRegistration:string;
 
 driverId?:string;
 
-driverName:string;
+driverName?:string;
 
 // request
 
@@ -332,6 +341,14 @@ sellerReviewedBy?:string;
 sellerApproved?:boolean;
 
 sellerNotes?:string;
+
+managerReviewedAt?:Date;
+
+managerReviewedBy?:string;
+
+managerNotes?:string;
+
+forwardedToAdminAt?:Date;
 
 // admin review
 
@@ -352,6 +369,10 @@ activatedAt?:Date;
 // QR
 
 qrCode?:string;
+
+qrGenerated?:boolean;
+
+qrGeneratedAt?:Date;
 
 // data
 
@@ -393,6 +414,8 @@ requestedAt:Date;
 reviewedAt?:Date;
 
 reviewedBy?:string;
+
+approvedAt?:Date;
 
 notes?:string;
 
