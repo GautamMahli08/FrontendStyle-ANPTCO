@@ -363,7 +363,7 @@ function ActionItem({ step, title, desc, urgent, onClick, cta, done }: {
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-bold leading-tight ${urgent ? 'text-gray-900' : 'text-gray-400'}`}>{title}</p>
           <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
-          {(urgent || (!done && step === 2 && onClick)) && (
+          {(urgent || (!done && step === 2)) && (
             <button onClick={onClick} className="mt-2 text-xs font-bold text-blue-600 hover:text-blue-700 transition">
               {cta} →
             </button>
