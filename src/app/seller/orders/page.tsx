@@ -7,6 +7,7 @@ import Header  from '@/src/components/layout/Header';
 import {
   getCurrentUser, getUsers, getOrders, getTrucks,
   getSellerConnections, updateOrder, addNotification,
+  assignTransporterAndDispatch,
 } from '@/src/lib/demo-data';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
 
@@ -117,20 +118,26 @@ export default function SellerOrdersPage() {
     const tsp = tsps.find(t => t.id === selectedTsp);
     if (!tsp) return;
 
-    updateOrder(order.id, { status: 'ASSIGNED_TO_TSP', assignedTSPId: tsp.id, assignedAt: new Date() });
-    logDemoEvent('seller-001', 'ASSIGNED_TO_TSP', `orderId=${order.id} | tsp=${tsp.companyName ?? tsp.firstName}`);
+    // Assigning the transporter dispatches a truck — it leaves the depot immediately.
+    const { dispatched } = assignTransporterAndDispatch(order.id, tsp.id);
+    const tspName = tsp.companyName ?? tsp.firstName;
+    logDemoEvent('seller-001', dispatched ? 'JOURNEY_STARTED' : 'ASSIGNED_TO_TSP', `orderId=${order.id} | tsp=${tspName}`);
 
     addNotification({
       id: `notif-${Date.now()}`, userId: tsp.id,
       type: 'ORDER_ASSIGNED_TO_TSP', title: '📦 New Order Assigned',
-      message: `Order #${order.id.slice(0, 8)} — ${fuelSummary(order)} → ${order.destinationName}. Assign a truck.`,
+      message: dispatched
+        ? `Order #${order.id.slice(0, 8)} — ${fuelSummary(order)} → ${order.destinationName}. Truck dispatched.`
+        : `Order #${order.id.slice(0, 8)} — ${fuelSummary(order)} → ${order.destinationName}. Assign a truck.`,
       read: false, createdAt: new Date(),
     });
     if (order.clientId) {
       addNotification({
         id: `notif-${Date.now()}-c`, userId: order.clientId,
-        type: 'ORDER_PROGRESS', title: '🚛 Transport Assigned',
-        message: `Your order has been assigned to ${tsp.companyName ?? tsp.firstName}.`,
+        type: 'ORDER_PROGRESS', title: dispatched ? '🚛 Truck En Route' : '🚛 Transport Assigned',
+        message: dispatched
+          ? `${tspName} dispatched a truck to ${order.destinationName}. Track it live.`
+          : `Your order has been assigned to ${tspName}.`,
         read: false, createdAt: new Date(),
       });
     }
@@ -277,9 +284,12 @@ export default function SellerOrdersPage() {
                           )}
 
                           {['ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(order.status) && (
-                            <span className="text-xs text-blue-600 font-semibold">
-                              {order.assignedTruckRegistration ?? 'In transit'}
-                            </span>
+                            <button
+                              onClick={() => router.push('/seller/fleet-monitor')}
+                              className="text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-1.5 rounded-lg transition flex items-center gap-1"
+                            >
+                              📍 Track {order.assignedTruckRegistration ?? ''}
+                            </button>
                           )}
 
                           {order.status === 'COMPLETED' && (

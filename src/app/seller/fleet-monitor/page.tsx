@@ -2,9 +2,19 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getTrucks, getOrders, getFuelAnomalies, updateFuelAnomaly } from '@/src/lib/demo-data';
+import {
+  getCurrentUser, getTrucks, getOrders, getFuelAnomalies, updateFuelAnomaly,
+  advanceJourneys, destinationCoords, FIXED_DEPOT, JOURNEY_DURATION_MS,
+} from '@/src/lib/demo-data';
+
+// Leaflet touches `window`, so load the map only on the client.
+const LiveTrackingMap = dynamic(() => import('@/src/components/maps/LiveTrackingMap'), {
+  ssr: false,
+  loading: () => <div className="w-full h-[440px] flex items-center justify-center text-sm text-gray-400">Loading map…</div>,
+});
 
 const SEVERITY_STYLE: Record<string, string> = {
   HIGH:   'bg-red-100    text-red-700    border-red-300',
@@ -35,6 +45,7 @@ export default function FleetMonitorPage() {
   const [mounted,   setMounted]   = useState(false);
 
   const load = useCallback((u: any) => {
+    advanceJourneys(); // mark trucks that have reached their station as ARRIVED
     const allTrucks = getTrucks();
     setTrucks(allTrucks.filter((t: any) => t.workspaceId === u.workspaceId));
     setOrders(getOrders().filter((o: any) => o.workspaceId === u.workspaceId));
@@ -60,6 +71,21 @@ export default function FleetMonitorPage() {
   const selectedOrder = selectedTruck
     ? orders.find(o => o.assignedTruckId === selectedTruck.id && !['COMPLETED', 'CANCELLED'].includes(o.status))
     : null;
+
+  const activeJourneys = orders
+    .filter(o => ['EN_ROUTE', 'ARRIVED'].includes(o.status) && o.assignedTruckId)
+    .map(o => {
+      const dest = destinationCoords(o);
+      return {
+        id:         o.id,
+        truckReg:   o.assignedTruckRegistration || 'Truck',
+        status:     o.status,
+        depot:      { lat: FIXED_DEPOT.lat, lng: FIXED_DEPOT.lng, name: FIXED_DEPOT.name },
+        dest:       { lat: dest.lat, lng: dest.lng, name: o.destinationName || 'Destination' },
+        startedAt:  o.tripStartedAt ? new Date(o.tripStartedAt).getTime() : Date.now(),
+        durationMs: JOURNEY_DURATION_MS,
+      };
+    });
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -89,6 +115,31 @@ export default function FleetMonitorPage() {
             <KpiTile label="Idle & Ready"  value={idle.length}            icon="✅" color="green"  />
             <KpiTile label="Theft Alerts"  value={openAnomalies.length}   icon="🚨" color="red"    highlight={openAnomalies.length > 0} />
           </div>
+
+          {/* ── LIVE JOURNEY MAP ── */}
+          <section className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="font-bold text-gray-900">Live Delivery Tracking</h2>
+                <p className="text-xs text-gray-500 mt-0.5">Trucks en route from the ANPTCO depot to client stations</p>
+              </div>
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
+                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                {activeJourneys.length} active
+              </span>
+            </div>
+            <div className="relative bg-slate-50">
+              {activeJourneys.length > 0 ? (
+                <LiveTrackingMap journeys={activeJourneys} className="w-full h-[440px]" />
+              ) : (
+                <div className="w-full h-[440px] flex flex-col items-center justify-center text-center">
+                  <p className="text-3xl mb-2">🗺️</p>
+                  <p className="text-sm font-semibold text-gray-600">No active journeys</p>
+                  <p className="text-xs text-gray-400 mt-1">Assign a transporter to an order to dispatch a truck</p>
+                </div>
+              )}
+            </div>
+          </section>
 
           {/* ── THEFT ALERTS PANEL ── */}
           {openAnomalies.length > 0 && (

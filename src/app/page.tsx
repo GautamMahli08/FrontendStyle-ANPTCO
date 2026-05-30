@@ -67,11 +67,10 @@ const PERSONA_THEME: Record<string, { card: string; badge: string; iconBg: strin
   teal:   { card: 'border-teal-200   hover:border-teal-400   hover:bg-teal-50/50',      badge: 'bg-teal-100   text-teal-700',     iconBg: 'bg-teal-100   text-teal-600'     },
 };
 
-// Persona layout — 2 / 2 / 3 rows keep the selector compact
+// Persona layout — hide platform admin, client 2 and driver from the selector
 const PERSONA_ROWS = [
-  ['admin-platform', 'seller-001'],
+  ['client-001', 'seller-001'],
   ['tsp-001', 'tsp-002'],
-  ['client-001', 'client-002', 'driver-001'],
 ];
 
 export default function Home() {
@@ -189,10 +188,13 @@ export default function Home() {
             <div className="space-y-2 max-w-3xl mx-auto">
               {PERSONA_ROWS.map((row, ri) => (
                 <div key={ri} className={`grid gap-2 ${row.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
-                  {DEMO_PERSONAS.filter(p => row.includes(p.id)).map(persona => {
-                    const theme = PERSONA_THEME[persona.color] || PERSONA_THEME.blue;
-                    const isLoading = loading === persona.id;
-                    return (
+                  {row
+                    .map(id => DEMO_PERSONAS.find(p => p.id === id))
+                    .filter((persona): persona is typeof DEMO_PERSONAS[number] => Boolean(persona))
+                    .map(persona => {
+                      const theme = PERSONA_THEME[persona.color] || PERSONA_THEME.blue;
+                      const isLoading = loading === persona.id;
+                      return (
                       <button
                         key={persona.id}
                         onClick={() => quickLogin(persona.id)}

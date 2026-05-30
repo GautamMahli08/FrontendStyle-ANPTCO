@@ -188,10 +188,20 @@ const DEMO_WORKSPACES: Workspace[] = [
 const DEMO_USERS: User[] = [
   PLATFORM_ADMIN,
   {
+    id: 'client-001',
+    email: 'client1@fuelclient.com',
+    firstName: 'Client',
+    lastName: '1',
+    role: 'CLIENT',
+    workspaceId: 'ws-anptco',
+    companyName: 'Client Corp 1',
+    verified: true,
+  },
+  {
     id: 'seller-001',
     email: 'seller1@anptco.com',
-    firstName: 'Lemmen',
-    lastName: 'Seller 1',
+    firstName: 'Seller 1',
+    lastName: '',
     role: 'SELLER_MANAGER',
     workspaceId: 'ws-anptco',
     companyName: 'ANPTCO Fuel Depot',
@@ -202,8 +212,8 @@ const DEMO_USERS: User[] = [
   {
     id: 'tsp-001',
     email: 'admin@transporter1.com',
-    firstName: 'Trans',
-    lastName: 'Admin 1',
+    firstName: 'TSP 1',
+    lastName: '',
     role: 'TRANSPORT_ADMIN',
     workspaceId: 'ws-anptco',
     companyName: 'Transporter 1',
@@ -212,21 +222,11 @@ const DEMO_USERS: User[] = [
   {
     id: 'tsp-002',
     email: 'admin@transporter2.com',
-    firstName: 'Trans',
-    lastName: 'Admin 2',
+    firstName: 'TSP 2',
+    lastName: '',
     role: 'TRANSPORT_ADMIN',
     workspaceId: 'ws-anptco',
     companyName: 'Transporter 2',
-    verified: true,
-  },
-  {
-    id: 'client-001',
-    email: 'client1@fuelclient.com',
-    firstName: 'Client',
-    lastName: '1',
-    role: 'CLIENT',
-    workspaceId: 'ws-anptco',
-    companyName: 'Client Corp 1',
     verified: true,
   },
   {
@@ -725,6 +725,72 @@ export const updateTruck = (truckId: string, updates: Partial<Truck>) => {
   saveToStorage(STORAGE_KEYS.TRUCKS, trucks.map(t => t.id === truckId ? { ...t, ...updates } : t));
 };
 
+// ── Live journey tracking ─────────────────────────────────────
+// How long a depot → destination journey takes in the demo.
+export const JOURNEY_DURATION_MS = 45_000;
+
+/** 0 → 1 progress of an order's journey, derived from its tripStartedAt timestamp. */
+export function journeyProgress(order: any): number {
+  if (order?.status === 'ARRIVED' || order?.status === 'COMPLETED') return 1;
+  const start = order?.tripStartedAt ? new Date(order.tripStartedAt).getTime() : 0;
+  if (!start) return 0;
+  return Math.max(0, Math.min(1, (Date.now() - start) / JOURNEY_DURATION_MS));
+}
+
+/** Destination coordinates for an order (prefers the order's own coords, falls back to the zone). */
+export function destinationCoords(order: any): { lat: number; lng: number } {
+  if (typeof order?.destinationLat === 'number' && typeof order?.destinationLng === 'number') {
+    return { lat: order.destinationLat, lng: order.destinationLng };
+  }
+  const zone = DELIVERY_ZONES.find(z => z.id === order?.destination);
+  return zone ? { lat: zone.lat, lng: zone.lng } : { lat: FIXED_DEPOT.lat, lng: FIXED_DEPOT.lng };
+}
+
+/** Flip any EN_ROUTE order whose journey has elapsed to ARRIVED (truck reached the station). */
+export function advanceJourneys(): boolean {
+  let changed = false;
+  getOrders().forEach((o: any) => {
+    if (o.status === 'EN_ROUTE' && journeyProgress(o) >= 1) {
+      updateOrder(o.id, { status: 'ARRIVED', arrivedAt: new Date() });
+      if (o.assignedTruckId) updateTruck(o.assignedTruckId, { status: 'ARRIVED' });
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+/**
+ * Seller assigns a transporter → a truck for that transporter immediately leaves the
+ * depot and starts the journey to the destination (status EN_ROUTE, tripStartedAt = now).
+ * Falls back to the manual TSP flow (ASSIGNED_TO_TSP) only if the transporter has no truck.
+ */
+export function assignTransporterAndDispatch(orderId: string, tspId: string): { dispatched: boolean } {
+  const order: any = getOrders().find(o => o.id === orderId);
+  const tsp: any = getUsers().find(u => u.id === tspId);
+  if (!order || !tsp) return { dispatched: false };
+
+  const tspTrucks = getTrucks().filter((t: any) => t.tspId === tspId);
+  const truck: any = tspTrucks.find((t: any) => t.status === 'IDLE' || t.status === 'ACTIVE') ?? tspTrucks[0];
+
+  if (truck) {
+    const driver: any = getDrivers().find((d: any) => d.tspId === tspId);
+    updateOrder(orderId, {
+      status:                    'EN_ROUTE',
+      assignedTSPId:             tspId,
+      assignedTruckId:           truck.id,
+      assignedTruckRegistration: truck.registrationNumber,
+      assignedDriverId:          driver?.id ?? '',
+      assignedDriverName:        driver ? `${driver.firstName} ${driver.lastName}` : 'Driver',
+      tripStartedAt:             new Date(),
+    });
+    updateTruck(truck.id, { status: 'EN_ROUTE' });
+    return { dispatched: true };
+  }
+
+  updateOrder(orderId, { status: 'ASSIGNED_TO_TSP', assignedTSPId: tspId });
+  return { dispatched: false };
+}
+
 // ── Driver helpers ────────────────────────────────────────────
 export const getDriverById = (driverId: string): Driver | undefined =>
   getDrivers().find(d => d.id === driverId);
@@ -866,7 +932,7 @@ export const DEMO_PERSONAS = [
   {
     id: 'seller-001',
     label: 'Seller Manager',
-    name: 'Lemmen Seller 1',
+    name: 'Seller 1',
     email: 'seller1@anptco.com',
     password: 'seller123',
     role: 'SELLER_MANAGER' as const,
@@ -878,7 +944,7 @@ export const DEMO_PERSONAS = [
   {
     id: 'tsp-001',
     label: 'Transporter 1',
-    name: 'Trans Admin 1',
+    name: 'TSP 1',
     email: 'admin@transporter1.com',
     password: 'transport123',
     role: 'TRANSPORT_ADMIN' as const,
@@ -890,7 +956,7 @@ export const DEMO_PERSONAS = [
   {
     id: 'tsp-002',
     label: 'Transporter 2',
-    name: 'Trans Admin 2',
+    name: 'TSP 2',
     email: 'admin@transporter2.com',
     password: 'transport123',
     role: 'TRANSPORT_ADMIN' as const,
