@@ -1,208 +1,190 @@
-// src/app/client/orders/new/page.tsx
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
-import Header from '@/src/components/layout/Header';
-import { getCurrentUser, getDeliveryLocations, addOrder } from '@/src/lib/demo-data';
+import Header  from '@/src/components/layout/Header';
+import { getCurrentUser, addOrder, addNotification, DELIVERY_ZONES } from '@/src/lib/demo-data';
+import { logDemoEvent } from '@/src/app/client/dashboard/page';
 
-// ── Types ─────────────────────────────────────────────────────
-interface Tank {
-  id: string;
-  clientId: string;
-  name: string;
-  fuelType: string;
-  capacity: number;
-  currentLevel: number;
-  minLevel: number;
-  reorderAlert: boolean;
-  lastRefilled: Date;
-  createdAt: Date;
-}
+const FUEL_TYPES = [
+  {
+    key: 'DIESEL',
+    label: 'Diesel',
+    desc: 'Standard diesel fuel for heavy vehicles',
+    iconBg: 'bg-blue-100',
+    iconColor: 'text-blue-600',
+    activeBorder: 'border-blue-500',
+    activeBg: 'bg-blue-50',
+    presets: [1000, 3000, 5000, 10000],
+    svg: (
+      <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+        <ellipse cx="12" cy="6" rx="8" ry="3" />
+        <path d="M4 6v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6" />
+        <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
+      </svg>
+    ),
+  },
+  {
+    key: 'PETROL',
+    label: 'Petrol',
+    desc: 'Regular unleaded petrol',
+    iconBg: 'bg-orange-100',
+    iconColor: 'text-orange-600',
+    activeBorder: 'border-orange-500',
+    activeBg: 'bg-orange-50',
+    presets: [500, 1000, 2000, 5000],
+    svg: (
+      <svg width={20} height={20} viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <path d="M12 2C9.5 6.5 7 9.5 7 13.5a5 5 0 0010 0C17 9.5 14.5 6.5 12 2zm0 15.5a3 3 0 01-3-3c0-1.8 1.2-3.5 3-5.5 1.8 2 3 3.7 3 5.5a3 3 0 01-3 3z" />
+      </svg>
+    ),
+  },
+  {
+    key: 'PREMIUM',
+    label: 'Premium',
+    desc: 'High-octane premium petrol',
+    iconBg: 'bg-purple-100',
+    iconColor: 'text-purple-600',
+    activeBorder: 'border-purple-500',
+    activeBg: 'bg-purple-50',
+    presets: [500, 1000, 2000, 3000],
+    svg: (
+      <svg width={20} height={20} viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />
+      </svg>
+    ),
+  },
+];
 
-interface DeliveryLocation {
-  id: string;
-  name: string;
-  address: string;
-}
+type FuelSelection = { volume: number; custom: string; useCustom: boolean };
 
-// ── localStorage tank reader (mirrors tanks page) ─────────────
-const TANKS_KEY = 'fuelfleet_tanks';
+export default function NewOrderPage() {
+  const router = useRouter();
+  const [user,    setUser]    = useState<any>(null);
+  const [mounted, setMounted] = useState(false);
+  const [step,    setStep]    = useState<1 | 2>(1);
+  const [success, setSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-function getTanksForClient(clientId: string): Tank[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(TANKS_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw)
-      .filter((t: any) => t.clientId === clientId)
-      .map((t: any) => ({
-        ...t,
-        lastRefilled: new Date(t.lastRefilled),
-        createdAt:    new Date(t.createdAt),
-        reorderAlert: t.currentLevel <= t.minLevel,
-      }));
-  } catch {
-    return [];
-  }
-}
+  // Multi-fuel selection: key → { volume, custom, useCustom }
+  const [selected, setSelected] = useState<Record<string, FuelSelection>>({});
+  const [locationId, setLocationId] = useState('');
+  const [notes,      setNotes]      = useState('');
 
-// ── Inner component ───────────────────────────────────────────
-function NewOrderForm() {
-  const router       = useRouter();
-  const searchParams = useSearchParams();
-
-  const [user,       setUser]       = useState<any>(null);
-  const [mounted,    setMounted]    = useState(false);
-  const [tanks,      setTanks]      = useState<Tank[]>([]);
-  const [locations,  setLocations]  = useState<DeliveryLocation[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted,  setSubmitted]  = useState(false);
-
-  // Form fields
-  const [selectedTankId,      setSelectedTankId]      = useState('');
-  const [fuelType,             setFuelType]            = useState('DIESEL');
-  const [volume,               setVolume]              = useState('');
-  const [locationId,           setLocationId]          = useState('');
-  const [customLocation,       setCustomLocation]      = useState('');
-  const [useCustomLocation,    setUseCustomLocation]   = useState(false);
-  const [notes,                setNotes]               = useState('');
-  const [urgency,              setUrgency]             = useState<'NORMAL' | 'URGENT'>('NORMAL');
-
-  // Derived
-  const selectedTank    = tanks.find(t => t.id === selectedTankId) ?? null;
-  const suggestedVolume = selectedTank ? selectedTank.capacity - selectedTank.currentLevel : null;
-  const fillPercentage  = selectedTank ? Math.round((selectedTank.currentLevel / selectedTank.capacity) * 100) : null;
-
-  // ── Init ──────────────────────────────────────────────────
   useEffect(() => {
     setMounted(true);
-    const currentUser = getCurrentUser();
-    if (!currentUser || currentUser.role !== 'CLIENT') {
-      router.push('/');
-      return;
-    }
-    setUser(currentUser);
-
-    // ── Load tanks from localStorage (live data) ──────────
-    const clientTanks = getTanksForClient(currentUser.id);
-    setTanks(clientTanks);
-
-    // Load delivery locations
-    const locs = getDeliveryLocations?.() ?? [];
-    setLocations(locs);
-
-    // ── Handle preFill from tanks page quick-order ────────
-    const preFillParam = searchParams.get('preFill');
-    if (preFillParam) {
-      try {
-        const pre = JSON.parse(decodeURIComponent(preFillParam));
-        if (pre.fuelType) setFuelType(pre.fuelType);
-        if (pre.volume)   setVolume(String(pre.volume));
-        // Match by tankId first (exact), fall back to name
-        if (pre.tankId) {
-          const match = clientTanks.find(t => t.id === pre.tankId);
-          if (match) setSelectedTankId(match.id);
-        } else if (pre.tankName) {
-          const match = clientTanks.find(t => t.name === pre.tankName);
-          if (match) setSelectedTankId(match.id);
-        }
-      } catch (_) {}
-    }
-  }, [router, searchParams]);
-
-  // ── Sync fuelType when tank changes ──────────────────────
-  useEffect(() => {
-    if (selectedTank) setFuelType(selectedTank.fuelType);
-  }, [selectedTankId]);
-
-  // ── Submit ────────────────────────────────────────────────
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!volume || parseInt(volume) <= 0) {
-      alert('Please enter a valid volume.');
-      return;
-    }
-    if (!locationId && !customLocation) {
-      alert('Please select or enter a delivery location.');
-      return;
-    }
-
-    setSubmitting(true);
-
-    const destination = useCustomLocation
-      ? customLocation
-      : locations.find(l => l.id === locationId)?.name ?? '';
-
-    const newOrder = {
-      id:          `order-${Date.now()}`,
-      clientId:    user.id,
-      clientName:  user.name,
-      fuelType,
-      volume:      parseInt(volume),
-      destination,
-      status:      'PENDING',
-      urgency,
-      notes,
-      tankId:      selectedTank?.id   ?? null,
-      tankName:    selectedTank?.name ?? null,
-      createdAt:   new Date(),
-    };
-
-    addOrder(newOrder);
-
-    await new Promise(r => setTimeout(r, 700));
-    setSubmitting(false);
-    setSubmitted(true);
-  };
+    const u = getCurrentUser();
+    if (!u || u.role !== 'CLIENT') { router.push('/'); return; }
+    setUser(u);
+  }, [router]);
 
   if (!mounted || !user) return null;
 
-  // ── Success Screen ────────────────────────────────────────
-  if (submitted) {
+  const selectedKeys = Object.keys(selected);
+  const canProceed   = selectedKeys.length > 0 && selectedKeys.every(k => {
+    const s = selected[k];
+    return (s.useCustom ? parseInt(s.custom) || 0 : s.volume) >= 100;
+  });
+  const canSubmit = canProceed && locationId;
+  const location  = DELIVERY_ZONES.find(z => z.id === locationId);
+
+  function getFinalVolume(s: FuelSelection) {
+    return s.useCustom ? (parseInt(s.custom) || 0) : s.volume;
+  }
+
+  function toggleFuel(key: string) {
+    setSelected(prev => {
+      if (prev[key]) {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return { ...prev, [key]: { volume: FUEL_TYPES.find(f => f.key === key)!.presets[1], custom: '', useCustom: false } };
+    });
+  }
+
+  function updateSelection(key: string, patch: Partial<FuelSelection>) {
+    setSelected(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+  }
+
+  const handleSubmit = () => {
+    if (!canSubmit) return;
+    setLoading(true);
+    setTimeout(() => {
+      const orderId   = `order-${Date.now()}`;
+      const fuelItems = selectedKeys.map(k => ({ fuelType: k, volume: getFinalVolume(selected[k]) }));
+      const isMixed   = fuelItems.length > 1;
+
+      logDemoEvent(user.id, 'ORDER_PLACED',
+        `${fuelItems.map(f => `${f.volume}L ${f.fuelType}`).join(' + ')} → ${location!.name} | orderId=${orderId}`
+      );
+
+      addOrder({
+        id:                 orderId,
+        clientId:           user.id,
+        clientName:         user.companyName ?? `${user.firstName} ${user.lastName}`,
+        workspaceId:        'ws-anptco',
+        fuelType:           isMixed ? 'MIXED' : fuelItems[0].fuelType as any,
+        volume:             totalLitres,
+        fuelItems:          fuelItems as any,
+        status:             'PLACED',
+        destination:        location!.id,
+        destinationName:    location!.name,
+        destinationAddress: location!.address,
+        destinationLat:     location!.lat,
+        destinationLng:     location!.lng,
+        notes:              notes || undefined,
+        createdAt:          new Date(),
+      });
+
+      const summary = fuelItems.map(f => `${f.volume.toLocaleString()}L ${f.fuelType}`).join(' + ');
+      addNotification({
+        id:        `notif-${Date.now()}`,
+        userId:    'seller-001',
+        type:      'ORDER_PLACED',
+        title:     `📦 New Order — ${user.companyName ?? user.firstName}`,
+        message:   `${summary} → ${location!.name}`,
+        read:      false,
+        createdAt: new Date(),
+      });
+
+      setLoading(false);
+      setSuccess(true);
+    }, 700);
+  };
+
+  const totalLitres = selectedKeys.reduce((sum, k) => sum + getFinalVolume(selected[k]), 0);
+
+  // ── Success ───────────────────────────────────────────────────
+  if (success) {
     return (
-      <div className="flex min-h-screen bg-gray-50">
+      <div className="flex min-h-screen bg-slate-50">
         <Sidebar userRole={user.role} />
-        <div className="flex-1">
-          <Header user={user} /> 
-          <main className="p-8 flex items-center justify-center min-h-[80vh]">
-            <div className="bg-white rounded-2xl shadow-lg p-12 text-center max-w-md w-full">
-              <div className="text-6xl mb-4">✅</div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Order Placed!</h2>
-              <p className="text-gray-500 mb-4">
-                Your order for{' '}
-                <span className="font-semibold">{parseInt(volume).toLocaleString()} L of {fuelType}</span>{' '}
-                has been submitted.
-              </p>
-              {selectedTank && (
-                <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-6">
-                  <p className="text-sm text-blue-600">
-                    🛢️ Filling: <span className="font-semibold">{selectedTank.name}</span>
+        <div className="flex-1 min-w-0">
+          <Header user={user} />
+          <main className="p-6 flex items-center justify-center min-h-[70vh]">
+            <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center max-w-md w-full shadow-lg">
+              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center text-4xl mx-auto mb-5">✅</div>
+              <h2 className="text-2xl font-black text-gray-900 mb-2">Order Placed!</h2>
+              <div className="space-y-1 mb-2">
+                {selectedKeys.map(k => (
+                  <p key={k} className="text-gray-600 text-sm">
+                    {getFinalVolume(selected[k]).toLocaleString()}L {k}
                   </p>
-                  <p className="text-xs text-blue-400 mt-0.5">
-                    Tank will update once delivery is completed
-                  </p>
-                </div>
-              )}
-              {urgency === 'URGENT' && (
-                <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2 mb-4 text-sm text-red-600 font-semibold">
-                  🚨 Marked as URGENT
-                </div>
-              )}
-              <div className="flex gap-3 justify-center">
-                <button
-                  onClick={() => router.push('/client/orders')}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition-colors"
-                >
-                  View My Orders
+                ))}
+                <p className="text-gray-500 text-xs mt-1">→ {location?.name}</p>
+              </div>
+              <p className="text-gray-400 text-xs mb-8">Seller has been notified. Track status in My Orders.</p>
+              <div className="flex gap-3">
+                <button onClick={() => router.push('/client/orders')} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition text-sm">
+                  Track Orders
                 </button>
                 <button
-                  onClick={() => router.push('/client/tanks')}
-                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold px-6 py-2 rounded-lg transition-colors"
+                  onClick={() => { setSuccess(false); setStep(1); setSelected({}); setLocationId(''); setNotes(''); }}
+                  className="flex-1 border border-gray-200 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition text-sm"
                 >
-                  Back to Tanks
+                  New Order
                 </button>
               </div>
             </div>
@@ -212,348 +194,239 @@ function NewOrderForm() {
     );
   }
 
-  // ── Main Form ─────────────────────────────────────────────
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-slate-50">
       <Sidebar userRole={user.role} />
-      <div className="flex-1">
-        <Header user={user} /> 
+      <div className="flex-1 min-w-0">
+        <Header user={user} />
+        <main className="p-6">
+          <div className="max-w-2xl mx-auto">
 
-        <main className="p-8 max-w-3xl">
-          <div className="mb-8 flex items-center gap-4">
-            <button
-              onClick={() => router.back()}
-              className="text-blue-600 hover:text-blue-800 font-medium text-sm"
-            >
-              ← Back
-            </button>
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Place Fuel Order ⛽</h1>
-              <p className="text-gray-500 text-sm">Fill in the details below to request a delivery.</p>
+            {/* Step indicator */}
+            <div className="flex items-center gap-0 mb-8">
+              {(['Fuel & Volume', 'Delivery Location'] as const).map((label, i) => {
+                const n = (i + 1) as 1 | 2;
+                const done = step > n;
+                const cur  = step === n;
+                return (
+                  <div key={label} className="flex items-center flex-1">
+                    <div className="flex flex-col items-center">
+                      <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-sm transition-all ${
+                        done ? 'bg-emerald-500 text-white' : cur ? 'bg-blue-600 text-white ring-4 ring-blue-100' : 'bg-gray-200 text-gray-400'
+                      }`}>
+                        {done ? '✓' : n}
+                      </div>
+                      <p className={`text-xs mt-1 font-medium ${cur ? 'text-blue-600' : done ? 'text-emerald-600' : 'text-gray-400'}`}>{label}</p>
+                    </div>
+                    {i < 1 && <div className={`flex-1 h-0.5 mx-2 -mt-5 ${done ? 'bg-emerald-400' : 'bg-gray-200'}`} />}
+                  </div>
+                );
+              })}
             </div>
-          </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="bg-white border border-gray-200 rounded-2xl p-7 shadow-sm">
 
-            {/* ── STEP 1: Tank Selection ── */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-gray-900 mb-1">
-                🛢️ Step 1 — Select Tank{' '}
-                <span className="text-gray-400 text-sm font-normal">(optional)</span>
-              </h2>
-              <p className="text-sm text-gray-500 mb-4">
-                Link this order to one of your tanks. Fuel type and suggested volume will auto-fill.
-              </p>
+              {/* ── STEP 1: Fuel & Volume ── */}
+              {step === 1 && (
+                <div>
+                  <h2 className="text-xl font-black text-gray-900 mb-1">Select Fuel & Quantities</h2>
+                  <p className="text-sm text-gray-500 mb-6">Choose one or more fuel types. Set the volume for each.</p>
 
-              {tanks.length === 0 ? (
-                <div className="text-center py-6 bg-gray-50 rounded-xl border border-dashed border-gray-300">
-                  <p className="text-gray-400 text-sm mb-2">No tanks registered yet.</p>
-                  <button
-                    type="button"
-                    onClick={() => router.push('/client/tanks')}
-                    className="text-blue-600 hover:underline text-sm font-medium"
-                  >
-                    + Add a Tank →
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-                    {tanks.map(tank => {
-                      const p          = Math.round((tank.currentLevel / tank.capacity) * 100);
-                      const isSelected = selectedTankId === tank.id;
+                  <div className="space-y-3 mb-6">
+                    {FUEL_TYPES.map(f => {
+                      const sel = selected[f.key];
+                      const isSelected = !!sel;
                       return (
-                        <button
-                          key={tank.id}
-                          type="button"
-                          onClick={() => setSelectedTankId(prev => prev === tank.id ? '' : tank.id)}
-                          className={`text-left p-4 rounded-xl border-2 transition-all ${
-                            isSelected
-                              ? 'border-blue-500 bg-blue-50'
-                              : tank.reorderAlert
-                              ? 'border-orange-200 bg-orange-50 hover:border-orange-400'
-                              : 'border-gray-200 bg-white hover:border-blue-300'
+                        <div
+                          key={f.key}
+                          className={`border-2 rounded-2xl transition-all overflow-hidden ${
+                            isSelected ? `${f.activeBorder} ${f.activeBg}` : 'border-gray-200 bg-white'
                           }`}
                         >
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-semibold text-gray-800 truncate pr-1">
-                              {tank.name}
-                            </span>
-                            {isSelected && <span className="text-blue-600 font-bold">✓</span>}
-                          </div>
+                          {/* Fuel type header — click to toggle */}
+                          <button
+                            onClick={() => toggleFuel(f.key)}
+                            className="w-full flex items-center gap-4 p-4 text-left"
+                          >
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${f.iconBg} ${f.iconColor}`}>
+                              {f.svg}
+                            </div>
+                            <div className="flex-1">
+                              <p className={`font-bold ${isSelected ? 'text-gray-900' : 'text-gray-700'}`}>{f.label}</p>
+                              <p className="text-xs text-gray-400">{f.desc}</p>
+                            </div>
+                            {/* Checkbox */}
+                            <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                              isSelected ? `${f.activeBorder} bg-white` : 'border-gray-300'
+                            }`}>
+                              {isSelected && (
+                                <svg className={`w-3.5 h-3.5 ${f.iconColor}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                          </button>
 
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full mb-2 inline-block ${
-                            tank.fuelType === 'DIESEL'  ? 'bg-blue-100 text-blue-700'    :
-                            tank.fuelType === 'PETROL'  ? 'bg-green-100 text-green-700'  :
-                            tank.fuelType === 'PREMIUM' ? 'bg-purple-100 text-purple-700':
-                                                          'bg-gray-100 text-gray-600'
-                          }`}>
-                            {tank.fuelType}
-                          </span>
-
-                          <div className="w-full bg-gray-200 rounded-full h-1.5 mb-1">
-                            <div
-                              className={`h-1.5 rounded-full ${
-                                tank.reorderAlert ? 'bg-red-500' : p < 50 ? 'bg-yellow-400' : 'bg-green-500'
-                              }`}
-                              style={{ width: `${p}%` }}
-                            />
-                          </div>
-                          <p className="text-xs text-gray-500">
-                            {tank.currentLevel.toLocaleString()} / {tank.capacity.toLocaleString()} L ({p}%)
-                          </p>
-                          {tank.reorderAlert && (
-                            <p className="text-xs text-orange-600 font-semibold mt-1">⚠️ Low Stock</p>
+                          {/* Volume selector — only when selected */}
+                          {isSelected && (
+                            <div className="px-4 pb-4 pt-0 border-t border-gray-100/80">
+                              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2.5 mt-3">Volume</p>
+                              <div className="flex flex-wrap gap-2 mb-3">
+                                {f.presets.map(v => (
+                                  <button
+                                    key={v}
+                                    onClick={() => updateSelection(f.key, { volume: v, useCustom: false })}
+                                    className={`px-3 py-1.5 rounded-lg border text-sm font-semibold transition-all ${
+                                      !sel.useCustom && sel.volume === v
+                                        ? `${f.activeBorder} bg-white ${f.iconColor}`
+                                        : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                                    }`}
+                                  >
+                                    {v.toLocaleString()}L
+                                  </button>
+                                ))}
+                                {/* Custom input */}
+                                <div className="relative">
+                                  <input
+                                    type="number"
+                                    min={100}
+                                    max={50000}
+                                    value={sel.custom}
+                                    onClick={e => e.stopPropagation()}
+                                    onChange={e => updateSelection(f.key, { custom: e.target.value, useCustom: true })}
+                                    placeholder="Custom"
+                                    className={`w-24 px-2.5 py-1.5 rounded-lg border text-sm font-semibold focus:outline-none transition ${
+                                      sel.useCustom ? `${f.activeBorder} ${f.activeBg}` : 'border-gray-200 focus:border-gray-400'
+                                    }`}
+                                  />
+                                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">L</span>
+                                </div>
+                              </div>
+                              {/* Confirmed volume display */}
+                              <p className={`text-xs font-bold ${f.iconColor}`}>
+                                {getFinalVolume(sel).toLocaleString()}L {f.label} selected
+                              </p>
+                            </div>
                           )}
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
 
-                  {/* Selected tank banner */}
-                  {selectedTank && (
-                    <div className="mt-3 bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-semibold text-blue-800">
-                          🛢️ Ordering for: {selectedTank.name}
-                        </p>
-                        <p className="text-xs text-blue-600 mt-0.5">
-                          Current: {selectedTank.currentLevel.toLocaleString()} L &nbsp;|&nbsp;
-                          Capacity: {selectedTank.capacity.toLocaleString()} L &nbsp;|&nbsp;
-                          Fill: {fillPercentage}%
-                        </p>
+                  {/* Summary pill */}
+                  {selectedKeys.length > 0 && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-5 flex items-center justify-between">
+                      <div className="flex flex-wrap gap-2">
+                        {selectedKeys.map(k => {
+                          const f = FUEL_TYPES.find(f => f.key === k)!;
+                          return (
+                            <span key={k} className={`text-xs font-bold px-2.5 py-1 rounded-full ${f.iconBg} ${f.iconColor}`}>
+                              {getFinalVolume(selected[k]).toLocaleString()}L {f.label}
+                            </span>
+                          );
+                        })}
                       </div>
-                      {suggestedVolume && suggestedVolume > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setVolume(String(suggestedVolume))}
-                          className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-semibold transition-colors whitespace-nowrap ml-4"
-                        >
-                          Use {suggestedVolume.toLocaleString()} L
-                        </button>
-                      )}
+                      <span className="text-xs text-gray-500 font-semibold ml-3 flex-shrink-0">
+                        {totalLitres.toLocaleString()}L total
+                      </span>
                     </div>
                   )}
-                </>
-              )}
-            </div>
 
-            {/* ── STEP 2: Fuel Details ── */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-gray-900 mb-4">⛽ Step 2 — Fuel Details</h2>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Fuel Type</label>
-                  <select
-                    value={fuelType}
-                    onChange={e => setFuelType(e.target.value)}
-                    disabled={!!selectedTank}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-gray-100 disabled:text-gray-500"
+                  <button
+                    onClick={() => setStep(2)}
+                    disabled={!canProceed}
+                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold py-3.5 rounded-xl transition text-sm"
                   >
-                    <option value="DIESEL">Diesel</option>
-                    <option value="PETROL">Petrol</option>
-                    <option value="PREMIUM">Premium</option>
-                  </select>
-                  {selectedTank && (
-                    <p className="text-xs text-gray-400 mt-1">Auto-set from selected tank</p>
-                  )}
+                    Continue →
+                  </button>
                 </div>
+              )}
 
+              {/* ── STEP 2: Location + Confirm ── */}
+              {step === 2 && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Volume (Litres)</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={volume}
-                      onChange={e => setVolume(e.target.value)}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none pr-28"
-                      placeholder="e.g. 5000"
-                      min={1}
-                      required
-                    />
-                    {suggestedVolume && suggestedVolume > 0 && volume !== String(suggestedVolume) && (
-                      <button
-                        type="button"
-                        onClick={() => setVolume(String(suggestedVolume))}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-blue-600 hover:underline whitespace-nowrap"
-                      >
-                        Use {suggestedVolume.toLocaleString()} L
-                      </button>
-                    )}
-                  </div>
-                  {selectedTank && suggestedVolume && suggestedVolume > 0 && (
-                    <p className="text-xs text-gray-400 mt-1">
-                      Suggested: {suggestedVolume.toLocaleString()} L to fill tank
-                    </p>
-                  )}
-                  {selectedTank && suggestedVolume !== null && suggestedVolume <= 0 && (
-                    <p className="text-xs text-green-600 mt-1">✅ Tank is already full</p>
-                  )}
-                </div>
+                  <h2 className="text-xl font-black text-gray-900 mb-1">Delivery Location</h2>
+                  <p className="text-sm text-gray-500 mb-6">Where should we deliver to?</p>
 
-                <div className="col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Urgency</label>
-                  <div className="flex gap-3">
-                    {(['NORMAL', 'URGENT'] as const).map(u => (
+                  <div className="space-y-2 mb-5">
+                    {DELIVERY_ZONES.map(zone => (
                       <button
-                        key={u}
-                        type="button"
-                        onClick={() => setUrgency(u)}
-                        className={`flex-1 py-2.5 rounded-lg border-2 font-semibold text-sm transition-all ${
-                          urgency === u
-                            ? u === 'URGENT'
-                              ? 'border-red-500 bg-red-50 text-red-700'
-                              : 'border-blue-500 bg-blue-50 text-blue-700'
-                            : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                        key={zone.id}
+                        onClick={() => setLocationId(zone.id)}
+                        className={`w-full flex items-center gap-4 p-4 rounded-xl border-2 text-left transition-all ${
+                          locationId === zone.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                         }`}
                       >
-                        {u === 'URGENT' ? '🚨 Urgent' : '📅 Normal'}
+                        <span className="text-2xl flex-shrink-0">⛽</span>
+                        <div className="flex-1 min-w-0">
+                          <p className={`font-bold text-sm ${locationId === zone.id ? 'text-blue-800' : 'text-gray-900'}`}>{zone.name}</p>
+                          <p className="text-xs text-gray-500 truncate">{zone.address}</p>
+                        </div>
+                        {locationId === zone.id && (
+                          <svg className="w-5 h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
                       </button>
                     ))}
                   </div>
-                </div>
-              </div>
-            </div>
 
-            {/* ── STEP 3: Delivery Location ── */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-gray-900 mb-4">📍 Step 3 — Delivery Location</h2>
-
-              {!useCustomLocation && locations.length > 0 && (
-                <div className="mb-3">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Select Location</label>
-                  <select
-                    value={locationId}
-                    onChange={e => setLocationId(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    required={!useCustomLocation}
-                  >
-                    <option value="">-- Choose a delivery point --</option>
-                    {locations.map(loc => (
-                      <option key={loc.id} value={loc.id}>
-                        {loc.name} — {loc.address}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {(useCustomLocation || locations.length === 0) && (
-                <div className="mb-3">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    {locations.length === 0 ? 'Delivery Location' : 'Custom Location'}
-                  </label>
-                  <input
-                    value={customLocation}
-                    onChange={e => setCustomLocation(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    placeholder="Enter address or location name"
-                    required={useCustomLocation || locations.length === 0}
-                  />
-                </div>
-              )}
-
-              {locations.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUseCustomLocation(p => !p);
-                    setLocationId('');
-                    setCustomLocation('');
-                  }}
-                  className="text-sm text-blue-600 hover:underline"
-                >
-                  {useCustomLocation ? '← Use saved location' : '+ Enter custom location'}
-                </button>
-              )}
-            </div>
-
-            {/* ── STEP 4: Notes ── */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-gray-900 mb-3">📝 Step 4 — Notes (Optional)</h2>
-              <textarea
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-                rows={3}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-                placeholder="Any special instructions for the driver or seller..."
-              />
-            </div>
-
-            {/* ── Order Summary ── */}
-            <div className="bg-gray-900 text-white rounded-2xl p-6 shadow-xl">
-              <h2 className="text-lg font-bold mb-4">🧾 Order Summary</h2>
-              <div className="space-y-2.5 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Tank</span>
-                  {selectedTank
-                    ? <span className="font-semibold text-blue-300">🛢️ {selectedTank.name}</span>
-                    : <span className="text-gray-500 italic">Not linked</span>
-                  }
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Fuel Type</span>
-                  <span className="font-semibold">{fuelType}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Volume</span>
-                  <span className="font-semibold">
-                    {volume ? `${parseInt(volume).toLocaleString()} L` : '—'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Destination</span>
-                  <span className="font-semibold truncate max-w-[200px] text-right">
-                    {useCustomLocation
-                      ? customLocation || '—'
-                      : locations.find(l => l.id === locationId)?.name || '—'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Urgency</span>
-                  <span className={`font-semibold ${urgency === 'URGENT' ? 'text-red-400' : 'text-green-400'}`}>
-                    {urgency === 'URGENT' ? '🚨 Urgent' : '📅 Normal'}
-                  </span>
-                </div>
-                {notes && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Notes</span>
-                    <span className="font-medium text-gray-300 truncate max-w-[200px] text-right">{notes}</span>
+                  <div className="mb-5">
+                    <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide block mb-2">Notes (optional)</label>
+                    <textarea
+                      value={notes}
+                      onChange={e => setNotes(e.target.value)}
+                      placeholder="Any special instructions for the driver…"
+                      rows={2}
+                      className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-blue-500 focus:outline-none transition resize-none"
+                    />
                   </div>
-                )}
-              </div>
 
-              <div className="border-t border-gray-700 mt-4 pt-4">
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold py-3.5 rounded-xl transition-colors text-base"
-                >
-                  {submitting ? '⏳ Placing Order...' : '🚀 Place Order'}
-                </button>
-              </div>
+                  {/* Order summary */}
+                  {canSubmit && (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-5">
+                      <p className="text-xs font-bold text-emerald-700 uppercase tracking-wide mb-3">Order Summary</p>
+                      <div className="space-y-1.5 mb-3">
+                        {selectedKeys.map(k => {
+                          const f = FUEL_TYPES.find(f => f.key === k)!;
+                          return (
+                            <div key={k} className="flex items-center justify-between text-sm">
+                              <div className={`flex items-center gap-1.5 ${f.iconColor}`}>
+                                <div className={`w-5 h-5 rounded-md flex items-center justify-center ${f.iconBg}`}>{f.svg}</div>
+                                <span className="font-semibold text-gray-700">{f.label}</span>
+                              </div>
+                              <span className="font-bold text-gray-900">{getFinalVolume(selected[k]).toLocaleString()}L</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="border-t border-emerald-200 pt-2.5 flex items-center justify-between text-sm">
+                        <span className="text-emerald-700 font-semibold">📍 {location?.name}</span>
+                        <span className="font-black text-gray-900">{totalLitres.toLocaleString()}L total</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button onClick={() => setStep(1)} className="flex-1 border border-gray-200 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition text-sm">
+                      ← Back
+                    </button>
+                    <button
+                      onClick={handleSubmit}
+                      disabled={!canSubmit || loading}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-black py-3 rounded-xl transition text-sm flex items-center justify-center gap-2"
+                    >
+                      {loading ? (
+                        <><svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>Placing…</>
+                      ) : '✅ Place Order'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-
-          </form>
+          </div>
         </main>
       </div>
     </div>
-  );
-}
-
-// ── Page export (Suspense required for useSearchParams) ───────
-export default function NewOrderPage() {
-  return (
-    <Suspense fallback={
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="text-4xl mb-3">⛽</div>
-          <p className="text-gray-500">Loading order form...</p>
-        </div>
-      </div>
-    }>
-      <NewOrderForm />
-    </Suspense>
   );
 }

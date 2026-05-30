@@ -192,6 +192,11 @@ export interface Ticket {
 }
 
 // ── Order ─────────────────────────────────────────────────────
+export interface FuelItem {
+  fuelType: FuelType | string;
+  volume: number;
+}
+
 export interface Order {
   id: string;
   clientId: string;
@@ -199,6 +204,7 @@ export interface Order {
   workspaceId?: string;
   fuelType: FuelType | string;
   volume: number;
+  fuelItems?: FuelItem[];
   status: OrderStatus | string;
   urgency?: Urgency;
   notes?: string;

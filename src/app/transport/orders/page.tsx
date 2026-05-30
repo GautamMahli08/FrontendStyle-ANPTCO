@@ -1,637 +1,447 @@
-// src/app/transport/orders/page.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
-import Header from '@/src/components/layout/Header';
-import StatusBadge from '@/src/components/workflow/StatusBadge';
+import Header  from '@/src/components/layout/Header';
 import {
-  getCurrentUser,
-  setCurrentUser,
-  getUsers,
-  getOrders,
-  getTrucks,
-  getDrivers,
-  updateOrder,
-  updateTruck,
-  updateDriver,
-  addNotification,
+  getCurrentUser, getOrders, getTrucks, getDrivers,
+  updateOrder, updateTruck, updateDriver, addNotification,
+  addFuelAnomaly,
 } from '@/src/lib/demo-data';
+import { logDemoEvent } from '@/src/app/client/dashboard/page';
+
+// Status helpers
+const STATUS_LABEL: Record<string, string> = {
+  ASSIGNED_TO_TSP: 'Needs Truck',
+  ASSIGNED:        'Truck Assigned',
+  EN_ROUTE:        'En Route',
+  ARRIVED:         'Arrived',
+  COMPLETED:       'Delivered',
+  CANCELLED:       'Cancelled',
+};
+const STATUS_COLOR: Record<string, string> = {
+  ASSIGNED_TO_TSP: 'bg-yellow-100 text-yellow-700',
+  ASSIGNED:        'bg-indigo-100 text-indigo-700',
+  EN_ROUTE:        'bg-blue-100 text-blue-700',
+  ARRIVED:         'bg-teal-100 text-teal-700',
+  COMPLETED:       'bg-emerald-100 text-emerald-700',
+  CANCELLED:       'bg-red-100 text-red-700',
+};
 
 export default function TransportOrdersPage() {
   const router = useRouter();
-  const [user, setUser]               = useState<any>(null);
-  const [mounted, setMounted]         = useState(false);
-  const [orders, setOrders]           = useState<any[]>([]);
-  const [drivers, setDrivers]         = useState<any[]>([]);
-  const [trucks, setTrucks]           = useState<any[]>([]);
-  const [selectedOrder, setSelectedOrder]     = useState<any>(null);
-  const [showAssignModal, setShowAssignModal] = useState(false);
-  const [selectedDriverId, setSelectedDriverId] = useState('');
+  const [user,           setUser]           = useState<any>(null);
+  const [orders,         setOrders]         = useState<any[]>([]);
+  const [trucks,         setTrucks]         = useState<any[]>([]);
+  const [drivers,        setDrivers]        = useState<any[]>([]);
+  const [mounted,        setMounted]        = useState(false);
+  const [assigning,      setAssigning]      = useState<any>(null);   // order being assigned
+  const [selectedTruck,  setSelectedTruck]  = useState('');
+  const [journeyLoading, setJourneyLoading] = useState<string | null>(null);
+
+  const loadData = useCallback((u: any) => {
+    const allOrders  = getOrders();
+    const allTrucks  = getTrucks();
+    const allDrivers = getDrivers();
+    setOrders(
+      allOrders
+        .filter((o: any) => o.assignedTSPId === u.id)
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    );
+    setTrucks(allTrucks.filter((t: any) => t.tspId === u.id));
+    setDrivers(allDrivers.filter((d: any) => d.tspId === u.id));
+  }, []);
 
   useEffect(() => {
     setMounted(true);
-    const currentUser = getCurrentUser();
-
-    if (!currentUser) { router.push('/'); return; }
-    if (currentUser.role !== 'TRANSPORT_ADMIN') { router.push('/'); return; }
-
-    setUser(currentUser);
-    loadData(currentUser);
-  }, []);
-
-  // ── Data loader ───────────────────────────────────────────────
-  const loadData = (currentUser: any) => {
-    const allOrders  = getOrders();
-    const allDrivers = getDrivers();
-    const allTrucks  = getTrucks();
-
-    // Orders assigned to this TSP — rehydrate dates
-    const tspOrders = allOrders
-      .filter((o) => o.assignedTSPId === currentUser.id)
-      .map((o) => ({ ...o, createdAt: new Date(o.createdAt) }))
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-
-    setOrders(tspOrders);
-    setDrivers(allDrivers.filter((d) => d.tspId === currentUser.id));
-    setTrucks(allTrucks.filter((t) => t.tspId === currentUser.id));
-  };
-
-  // ── Destination helper (handles both field names) ─────────────
-  const getDestination = (order: any) =>
-    order.destinationName ?? order.destination ?? '—';
-
-  // ── Role switcher ─────────────────────────────────────────────
-  const handleRoleChange = (userId: string) => {
-    const users   = getUsers();
-    const newUser = users.find((u) => u.id === userId);
-    if (newUser) {
-      setUser(newUser);
-      setCurrentUser(newUser);
-      const routes: Record<string, string> = {
-        PLATFORM_ADMIN:  '/platform-admin/dashboard',
-        SELLER_MANAGER:  '/seller/dashboard',
-        TRANSPORT_ADMIN: '/transport/dashboard',
-        CLIENT:          '/client/dashboard',
-        DRIVER:          '/driver/dashboard',
-      };
-      router.push(routes[newUser.role]);
-    }
-  };
-
-  // ── Assign driver ─────────────────────────────────────────────
-  const handleAssignDriver = () => {
-    if (!selectedDriverId || !selectedOrder) {
-      alert('❌ Please select a driver');
-      return;
-    }
-
-    const driver = drivers.find((d) => d.id === selectedDriverId);
-    if (!driver) { alert('❌ Driver not found'); return; }
-
-    if (!driver.assignedTruckId) {
-      alert('❌ Selected driver has no assigned truck. Go to Drivers page and assign a truck first.');
-      return;
-    }
-
-    const truck =
-trucks.find(
-(t) =>
-t.id ===
-driver.assignedTruckId
-);
-
-if (!truck) {
-
-alert(
-'❌ Truck not found'
-);
-
-return;
-
-}
-
-if (
-!truck.sensorConfigured
-) {
-
-alert(
-
-'❌ Truck sensor integration is not active.\n\nComplete:\nSeller Approval → Admin Activation'
-
-);
-
-return;
-
-}
-
-    const destination = getDestination(selectedOrder);
-
-    // Update order
-    updateOrder(selectedOrder.id, {
-      status:                    'ASSIGNED',
-      assignedDriverId:          driver.id,
-      assignedDriverName:        `${driver.firstName} ${driver.lastName}`,
-      assignedDriverPhone:       driver.phone,
-      assignedTruckId:           truck.id,
-      assignedTruckRegistration: truck.registrationNumber,
-      assignedAt:                new Date(),
-    });
-
-    // Update truck + driver status
-    updateTruck(truck.id, { status: 'ASSIGNED' });
-    updateDriver?.(driver.id, { currentStatus: 'ON_TRIP' });
-
-    // Notify driver
-    addNotification({
-      id:        `notif-${Date.now()}`,
-      userId:    driver.id,
-      type:      'TRIP_ASSIGNED',
-      title:     '🚛 New Trip Assigned',
-      message:   `Deliver ${selectedOrder.volume}L ${selectedOrder.fuelType} to ${destination}`,
-      read:      false,
-      createdAt: new Date(),
-    });
-
-    // Notify seller
-    const seller = getUsers().find(
-      (u) => u.role === 'SELLER_MANAGER' && u.workspaceId === user.workspaceId
-    );
-    if (seller) {
-      addNotification({
-        id:        `notif-${Date.now()}-seller`,
-        userId:    seller.id,
-        type:      'DRIVER_ASSIGNED',
-        title:     '✓ Driver Assigned',
-        message:   `Driver ${driver.firstName} ${driver.lastName} assigned to order #${selectedOrder.id.slice(0, 8)}`,
-        read:      false,
-        createdAt: new Date(),
-      });
-    }
-
-    // Notify client
-    if (selectedOrder.clientId) {
-      addNotification({
-        id:        `notif-${Date.now()}-client`,
-        userId:    selectedOrder.clientId,
-        type:      'DRIVER_ASSIGNED',
-        title:     '🚛 Driver Assigned',
-        message:   `Driver ${driver.firstName} ${driver.lastName} (${truck.registrationNumber}) will deliver your order`,
-        read:      false,
-        createdAt: new Date(),
-      });
-    }
-
-    alert(`✅ Driver ${driver.firstName} ${driver.lastName} assigned!`);
-    loadData(user);
-    setShowAssignModal(false);
-    setSelectedOrder(null);
-    setSelectedDriverId('');
-  };
+    const u = getCurrentUser();
+    if (!u || u.role !== 'TRANSPORT_ADMIN') { router.push('/'); return; }
+    setUser(u);
+    loadData(u);
+  }, [router, loadData]);
 
   if (!mounted || !user) return null;
 
-  // ── Pipeline buckets ──────────────────────────────────────────
-  const pendingAssignment = orders.filter((o) => o.status === 'ASSIGNED_TO_TSP');
-  const activeOrders      = orders.filter((o) => ['ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(o.status));
-  const completedOrders   = orders.filter((o) => o.status === 'COMPLETED');
+  // ── Assign truck to order ─────────────────────────────────
+  const handleAssignTruck = () => {
+    if (!selectedTruck || !assigning) return;
+    const truck  = trucks.find((t: any) => t.id === selectedTruck);
+    if (!truck) return;
+    const driver = drivers.find((d: any) => d.id === truck.assignedDriverId);
 
-  // ── FIX: relaxed driver availability ─────────────────────────
-  // Only require AVAILABLE status + assigned truck.
-  // Removed strict `verified` check so demo drivers always show.
-  const availableDrivers =
-drivers.filter(
-(driver) => {
+    updateOrder(assigning.id, {
+      status:                  'ASSIGNED',
+      assignedTruckId:         truck.id,
+      assignedTruckRegistration: truck.registrationNumber,
+      assignedDriverId:        driver?.id   ?? '',
+      assignedDriverName:      driver ? `${driver.firstName} ${driver.lastName}` : 'Driver TBD',
+      assignedDriverPhone:     driver?.phone ?? '',
+    });
+    updateTruck(truck.id, { status: 'ASSIGNED' });
+    logDemoEvent(user.id, 'TRUCK_ASSIGNED', `orderId=${assigning.id} | truck=${truck.registrationNumber} | driver=${driver?.firstName ?? 'TBD'} | clientId=${assigning.clientId}`);
 
-const truck =
-trucks.find(
-t =>
-t.id ===
-driver.assignedTruckId
-);
+    addNotification({
+      id: `notif-${Date.now()}`, userId: assigning.clientId ?? '',
+      type: 'TRUCK_ASSIGNED', title: '🚛 Truck Assigned',
+      message: `Truck ${truck.registrationNumber} assigned to your order. Journey starts soon.`,
+      read: false, createdAt: new Date(),
+    });
 
-return (
-
-driver.currentStatus
-===
-'AVAILABLE'
-
-&&
-
-driver.assignedTruckId
-
-&&
-
-truck?.sensorConfigured
-===
-
-true
-
-);
-
-}
-);
-
-  // ── Debug counts (used in modal) ──────────────────────────────
-  const debugCounts = {
-    total:        drivers.length,
-    available:    drivers.filter((d) => d.currentStatus === 'AVAILABLE').length,
-    withTruck:    drivers.filter((d) => d.assignedTruckId).length,
-    verified:     drivers.filter((d) => d.verified).length,
-    notAvailable: drivers.filter((d) => d.currentStatus !== 'AVAILABLE'),
+    setAssigning(null);
+    setSelectedTruck('');
+    loadData(user);
   };
 
+  // ── Start journey (truck leaves depot) ───────────────────
+  const handleStartJourney = (order: any) => {
+    setJourneyLoading(order.id);
+    updateOrder(order.id, { status: 'EN_ROUTE', tripStartedAt: new Date() });
+    updateTruck(order.assignedTruckId, { status: 'EN_ROUTE' });
+    logDemoEvent(user.id, 'JOURNEY_STARTED', `orderId=${order.id} | truck=${order.assignedTruckRegistration} | clientId=${order.clientId} | dest=${order.destinationName}`);
+
+    addNotification({
+      id: `notif-${Date.now()}`, userId: order.clientId ?? '',
+      type: 'TRUCK_EN_ROUTE', title: '🚛 Truck En Route',
+      message: `Your fuel truck (${order.assignedTruckRegistration}) has left the depot and is heading to ${order.destinationName ?? 'your location'}.`,
+      read: false, createdAt: new Date(),
+    });
+
+    // ── Theft simulation for Client 2 ──
+    if (order.clientId === 'client-002') {
+      setTimeout(() => {
+        addFuelAnomaly({
+          id:             `anomaly-${Date.now()}`,
+          orderId:        order.id,
+          truckReg:       order.assignedTruckRegistration ?? 'TRK',
+          compartment:    'C1 (Petrol)',
+          fuelDropLiters: 320,
+          location:       'Al Khuwair — off-route stop, 18 min',
+          detectedAt:     new Date(),
+          severity:       'HIGH',
+          status:         'OPEN',
+        });
+        // Notify seller
+        addNotification({
+          id: `notif-theft-${Date.now()}`, userId: 'seller-001',
+          type: 'FUEL_ANOMALY', title: '🚨 Fuel Anomaly Detected',
+          message: `Unexpected fuel drop of 320L on truck ${order.assignedTruckRegistration} (C1 Petrol) during Order #${order.id.slice(0, 8)}. Location: Al Khuwair.`,
+          read: false, createdAt: new Date(),
+        });
+      }, 3000);
+    }
+
+    setTimeout(() => { setJourneyLoading(null); loadData(user); }, 500);
+  };
+
+  // ── Mark truck arrived ────────────────────────────────────
+  const handleMarkArrived = (order: any) => {
+    updateOrder(order.id, { status: 'ARRIVED', arrivedAt: new Date() });
+    updateTruck(order.assignedTruckId, { status: 'ARRIVED' });
+    logDemoEvent(user.id, 'TRUCK_ARRIVED', `orderId=${order.id} | clientId=${order.clientId} | truck=${order.assignedTruckRegistration}`);
+
+    addNotification({
+      id: `notif-${Date.now()}`, userId: order.clientId ?? '',
+      type: 'TRUCK_ARRIVED', title: '📍 Truck Has Arrived!',
+      message: `Your fuel truck (${order.assignedTruckRegistration}) has arrived at ${order.destinationName ?? 'your location'}. Please scan the QR code to accept delivery.`,
+      read: false, createdAt: new Date(),
+    });
+    loadData(user);
+  };
+
+  // ── Pipeline buckets ──────────────────────────────────────
+  const needsTruck  = orders.filter((o: any) => o.status === 'ASSIGNED_TO_TSP');
+  const inProgress  = orders.filter((o: any) => ['ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(o.status));
+  const completed   = orders.filter((o: any) => ['COMPLETED', 'CANCELLED'].includes(o.status));
+
+  const idleTrucks  = trucks.filter((t: any) => ['IDLE', 'ACTIVE'].includes(t.status));
+
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-slate-50">
       <Sidebar userRole={user.role} />
 
-      <div className="flex-1">
+      <div className="flex-1 min-w-0">
         <Header user={user} />
 
-        <main className="p-8">
-          {/* Page title */}
-          <div className="mb-8 flex items-center justify-between">
+        <main className="p-6 space-y-6">
+
+          {/* Header */}
+          <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-1">Orders 📦</h1>
-              <p className="text-gray-500">Assign drivers to deliveries</p>
+              <h1 className="text-2xl font-black text-gray-900">Orders</h1>
+              <p className="text-sm text-gray-500 mt-0.5">{user.companyName} · {orders.length} total assigned</p>
             </div>
-            <button
-              onClick={() => loadData(user)}
-              className="text-sm bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 px-4 py-2 rounded-lg transition-colors"
-            >
-              🔄 Refresh
+            <button onClick={() => loadData(user)} className="text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 transition">
+              Refresh
             </button>
           </div>
 
-          {/* Stats */}
-          <div className="grid grid-cols-4 gap-6 mb-8">
-            {[
-              { label: 'Total Orders', value: orders.length,          color: 'text-gray-900'   },
-              { label: 'Need Driver',  value: pendingAssignment.length, color: 'text-orange-600' },
-              { label: 'Active',       value: activeOrders.length,     color: 'text-blue-600'   },
-              { label: 'Completed',    value: completedOrders.length,  color: 'text-green-600'  },
-            ].map((s) => (
-              <div key={s.label} className="bg-white rounded-xl p-6 border border-gray-200 text-center">
-                <p className="text-sm text-gray-500 mb-1">{s.label}</p>
-                <p className={`text-3xl font-bold ${s.color}`}>{s.value}</p>
-              </div>
-            ))}
-          </div>
-
-          {/* ── Needs Driver Assignment ── */}
-          {pendingAssignment.length > 0 && (
-            <section className="mb-10">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">
-                🟠 Assign Drivers ({pendingAssignment.length})
-              </h2>
-              <div className="grid md:grid-cols-2 gap-6">
-                {pendingAssignment.map((order) => (
-                  <div
-                    key={order.id}
-                    className="bg-white rounded-xl p-6 border-2 border-orange-200 shadow-sm"
-                  >
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <h3 className="text-lg font-semibold text-gray-900">
-                          Order #{order.id.slice(0, 8)}
-                        </h3>
-                        <p className="text-sm text-gray-500">{order.clientName}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {order.urgency === 'URGENT' && (
-                          <span className="bg-red-100 text-red-700 text-xs font-bold px-2 py-0.5 rounded-full">
-                            🚨 URGENT
-                          </span>
-                        )}
-                        <StatusBadge status={order.status} />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1 text-sm mb-4">
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Fuel</span>
-                        <span className="font-medium">
-                          {order.volume?.toLocaleString()}L {order.fuelType}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Destination</span>
-                        <span className="font-medium text-right max-w-[200px] truncate">
-                          {getDestination(order)}
-                        </span>
-                      </div>
-                      {order.tankName && (
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Tank</span>
-                          <span className="font-medium text-blue-600">🛢️ {order.tankName}</span>
-                        </div>
-                      )}
-                    </div>
-
+          {/* ── NEEDS TRUCK ASSIGNMENT ── */}
+          {needsTruck.length > 0 && (
+            <section>
+              <SectionTitle icon="🟡" label="Needs Truck Assignment" count={needsTruck.length} />
+              <div className="grid md:grid-cols-2 gap-4 mt-3">
+                {needsTruck.map((order: any) => (
+                  <OrderCard key={order.id} order={order}>
                     <button
-                      onClick={() => {
-                        setSelectedOrder(order);
-                        setSelectedDriverId('');
-                        setShowAssignModal(true);
-                      }}
-                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-lg transition-colors"
+                      onClick={() => { setAssigning(order); setSelectedTruck(''); }}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-xl transition text-sm"
                     >
-                      👤 Assign Driver
+                      🚛 Assign Truck
                     </button>
-                  </div>
+                  </OrderCard>
                 ))}
               </div>
             </section>
           )}
 
-          {/* ── Active Deliveries ── */}
-          {activeOrders.length > 0 && (
-            <section className="mb-10">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">
-                🔵 Active Deliveries ({activeOrders.length})
-              </h2>
-              <div className="grid md:grid-cols-2 gap-6">
-                {activeOrders.map((order) => (
-                  <div
-                    key={order.id}
-                    className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm"
-                  >
-                    <div className="flex items-start justify-between mb-3">
-                      <h3 className="text-lg font-semibold text-gray-900">
-                        Order #{order.id.slice(0, 8)}
-                      </h3>
-                      <StatusBadge status={order.status} />
+          {/* ── IN PROGRESS ── */}
+          {inProgress.length > 0 && (
+            <section>
+              <SectionTitle icon="🔵" label="Active Deliveries" count={inProgress.length} />
+              <div className="space-y-4 mt-3">
+                {inProgress.map((order: any) => (
+                  <div key={order.id} className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+                    <div className="flex items-start justify-between gap-4 mb-4">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="font-bold text-gray-900">Order #{order.id.slice(0, 8)}</p>
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                            {STATUS_LABEL[order.status] ?? order.status}
+                          </span>
+                          {order.clientId === 'client-002' && order.status === 'EN_ROUTE' && (
+                            <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded-full animate-pulse">
+                              🚨 Theft Alert Active
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-500">{order.volume?.toLocaleString()}L {order.fuelType} → {order.destinationName}</p>
+                      </div>
                     </div>
 
-                    <div className="space-y-2 text-sm mb-3">
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Fuel</span>
-                        <span className="font-medium">
-                          {order.volume?.toLocaleString()}L {order.fuelType}
-                        </span>
+                    {/* Truck + driver */}
+                    {order.assignedTruckRegistration && (
+                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 mb-4 flex items-center gap-3">
+                        <span className="text-2xl">🚛</span>
+                        <div>
+                          <p className="font-semibold text-gray-900 text-sm">{order.assignedTruckRegistration}</p>
+                          <p className="text-xs text-gray-500">{order.assignedDriverName} · QR: <span className="font-mono text-blue-600">{trucks.find(t => t.id === order.assignedTruckId)?.qrCode ?? '—'}</span></p>
+                        </div>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">To</span>
-                        <span className="font-medium">{getDestination(order)}</span>
-                      </div>
-                      {order.tankName && (
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Tank</span>
-                          <span className="font-medium text-blue-600">🛢️ {order.tankName}</span>
+                    )}
+
+                    {/* Journey progress bar */}
+                    <JourneyProgress status={order.status} />
+
+                    {/* Action buttons */}
+                    <div className="flex gap-3 mt-4">
+                      {order.status === 'ASSIGNED' && (
+                        <button
+                          onClick={() => handleStartJourney(order)}
+                          disabled={journeyLoading === order.id}
+                          className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-xl transition text-sm"
+                        >
+                          {journeyLoading === order.id ? 'Starting…' : '🚦 Start Journey'}
+                        </button>
+                      )}
+                      {order.status === 'EN_ROUTE' && (
+                        <button
+                          onClick={() => handleMarkArrived(order)}
+                          className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-2.5 rounded-xl transition text-sm"
+                        >
+                          📍 Mark as Arrived
+                        </button>
+                      )}
+                      {order.status === 'ARRIVED' && (
+                        <div className="flex-1 bg-teal-50 border border-teal-200 rounded-xl py-2.5 text-center text-sm font-semibold text-teal-700">
+                          ✅ Truck at destination — awaiting client QR scan
                         </div>
                       )}
                     </div>
-
-                    {order.assignedDriverName && (
-                      <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
-                        <p className="text-xs text-blue-700 font-semibold mb-0.5">
-                          👤 {order.assignedDriverName}
-                        </p>
-                        <p className="text-xs text-blue-600">
-                          🚛 {order.assignedTruckRegistration} &nbsp;•&nbsp; 📞 {order.assignedDriverPhone}
-                        </p>
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
             </section>
           )}
 
-          {/* ── Completed ── */}
-          {completedOrders.length > 0 && (
-            <section className="mb-10">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">
-                ✅ Completed ({completedOrders.length})
-              </h2>
-              <div className="grid md:grid-cols-3 gap-4">
-                {completedOrders.map((order) => (
-                  <div
-                    key={order.id}
-                    className="bg-white rounded-xl p-4 border border-green-200 shadow-sm"
-                  >
+          {/* ── COMPLETED ── */}
+          {completed.length > 0 && (
+            <section>
+              <SectionTitle icon="✅" label="Completed" count={completed.length} />
+              <div className="grid md:grid-cols-3 gap-4 mt-3">
+                {completed.map((order: any) => (
+                  <div key={order.id} className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
                     <div className="flex items-center justify-between mb-2">
-                      <p className="font-semibold text-gray-900">#{order.id.slice(0, 8)}</p>
-                      <StatusBadge status={order.status} />
+                      <p className="font-bold text-gray-900 text-sm">#{order.id.slice(0, 8)}</p>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                        {STATUS_LABEL[order.status] ?? order.status}
+                      </span>
                     </div>
-                    <p className="text-sm text-gray-600">
-                      {order.volume?.toLocaleString()}L {order.fuelType}
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1">{order.clientName}</p>
-                    {order.assignedDriverName && (
-                      <p className="text-xs text-green-600 mt-1">
-                        👤 {order.assignedDriverName}
-                      </p>
-                    )}
+                    <p className="text-xs text-gray-500">{order.volume?.toLocaleString()}L {order.fuelType}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{order.destinationName}</p>
                   </div>
                 ))}
               </div>
             </section>
           )}
 
-          {/* ── Empty State ── */}
+          {/* Empty */}
           {orders.length === 0 && (
-            <div className="bg-white rounded-xl p-16 text-center border border-gray-200">
-              <span className="text-6xl mb-4 block">📦</span>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">No Orders Yet</h3>
-              <p className="text-gray-500">
-                Orders assigned to your company by the seller will appear here.
-              </p>
+            <div className="bg-white border border-gray-200 rounded-2xl p-14 text-center">
+              <p className="text-4xl mb-3">📭</p>
+              <p className="font-semibold text-gray-900 mb-1">No orders assigned yet</p>
+              <p className="text-sm text-gray-500">Seller Manager will assign orders to {user.companyName} once accepted.</p>
             </div>
           )}
         </main>
       </div>
 
-      {/* ── Assign Driver Modal ── */}
-      {showAssignModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-2xl font-bold">Assign Driver</h3>
-              <button
-                onClick={() => { setShowAssignModal(false); setSelectedDriverId(''); }}
-                className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
-              >
-                ×
-              </button>
+      {/* ── ASSIGN TRUCK MODAL ── */}
+      {assigning && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-lg font-black text-gray-900">Assign Truck</h3>
+              <button onClick={() => setAssigning(null)} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition">✕</button>
             </div>
 
             {/* Order summary */}
-            <div className="bg-gray-50 rounded-xl p-4 mb-5">
-              <p className="text-xs text-gray-500 mb-1">Order</p>
-              <p className="font-bold text-lg">#{selectedOrder.id.slice(0, 8)}</p>
-              <p className="text-sm text-gray-700">
-                {selectedOrder.volume?.toLocaleString()}L {selectedOrder.fuelType} →{' '}
-                {getDestination(selectedOrder)}
-              </p>
-              {selectedOrder.tankName && (
-                <p className="text-sm text-blue-600 mt-1">
-                  🛢️ For tank: {selectedOrder.tankName}
-                </p>
-              )}
+            <div className="bg-slate-50 rounded-xl p-4 mb-5 border border-slate-200">
+              <p className="text-xs text-gray-500 mb-1">Order #{assigning.id.slice(0, 8)}</p>
+              <p className="font-bold text-gray-900">{assigning.volume?.toLocaleString()}L {assigning.fuelType}</p>
+              <p className="text-sm text-gray-600 mt-0.5">→ {assigning.destinationName}</p>
+              <p className="text-xs text-gray-400 mt-1">{assigning.clientName}</p>
             </div>
 
-            {/* Debug panel — remove when going to production */}
-            <details className="mb-4">
-              <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">
-                {/* 🔍 Debug info */}
-              </summary>
-              <div className="mt-2 bg-gray-50 rounded-lg p-3 text-xs text-gray-600 space-y-1">
-                <p>Total drivers in TSP: {debugCounts.total}</p>
-                <p>Status = AVAILABLE: {debugCounts.available}</p>
-                <p>Has assigned truck: {debugCounts.withTruck}</p>
-                <p>Verified: {debugCounts.verified}</p>
-                <p>Showing (AVAILABLE + truck): {availableDrivers.length}</p>
-                {drivers.map((d) => (
-                  <div key={d.id} className="pl-2 border-l-2 border-gray-200 mt-1">
-                    {d.firstName} {d.lastName} — status: <b>{d.currentStatus}</b>, truck:{' '}
-                    {d.assignedTruckId ? '✅' : '❌'}, verified: {d.verified ? '✅' : '❌'}
-                  </div>
-                ))}
+            {/* Truck picker */}
+            {idleTrucks.length === 0 ? (
+              <div className="text-center py-6">
+                <p className="text-3xl mb-2">🚛</p>
+                <p className="text-sm font-semibold text-gray-700">No idle trucks available</p>
+                <p className="text-xs text-gray-400 mt-1">All trucks are currently assigned or pending integration.</p>
               </div>
-            </details>
-
-            {availableDrivers.length > 0 ? (
-              <>
-                <p className="text-sm font-medium text-gray-700 mb-3">
-                  Select Driver ({availableDrivers.length} available):
-                </p>
-                <div className="space-y-3 mb-6">
-                  {availableDrivers.map((driver) => {
-                    const truck = trucks.find((t) => t.id === driver.assignedTruckId);
-                    return (
-                      <button
-                        key={driver.id}
-                        onClick={() => setSelectedDriverId(driver.id)}
-                        className={`w-full text-left p-4 rounded-xl border-2 transition-all ${
-                          selectedDriverId === driver.id
-                            ? 'border-blue-500 bg-blue-50'
-                            : 'border-gray-200 hover:border-blue-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="font-semibold text-gray-900">
-                              {driver.firstName} {driver.lastName}
-                            </p>
-                            <p className="text-sm text-gray-500">📞 {driver.phone}</p>
-                            {truck && (
-                              <p className="text-sm text-gray-500">
-                                🚛
-{truck.registrationNumber}
-
-{
-!truck.sensorConfigured
-&&
-
-<span
-className="
-ml-2
-text-red-600
-text-xs
-font-bold
-"
->
-
-SENSOR INACTIVE
-
-</span>
-
-}
-                                {truck.fuelType && (
-                                  <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
-                                    {truck.fuelType}
-                                  </span>
-                                )}
-                              </p>
-                            )}
-                            <p className="text-xs text-gray-400 mt-0.5">
-                              License: {driver.licenseNumber}
-                            </p>
-                          </div>
-                          {selectedDriverId === driver.id && (
-                            <span className="text-blue-600 text-2xl font-bold">✓</span>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  onClick={handleAssignDriver}
-                  disabled={!selectedDriverId}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl transition-colors"
-                >
-                  ✓ Assign Driver
-                </button>
-              </>
             ) : (
-              <div className="text-center py-8">
-                <span className="text-5xl mb-4 block">👤</span>
-                <h4 className="text-lg font-semibold text-gray-900 mb-2">No Available Drivers</h4>
-                <p className="text-sm text-red-600 mt-2">
-Drivers using trucks without active sensors are blocked.
-</p>
-                <p className="text-gray-500 mb-4">
-                  {drivers.length === 0
-                    ? 'No drivers registered yet.'
-                    : 'All drivers are busy or have incomplete setup.'}
-                </p>
-
-                {drivers.length > 0 && (
-                  <div className="text-left bg-orange-50 border border-orange-200 rounded-xl p-4 mb-4">
-                    <p className="text-sm text-orange-800 font-semibold mb-2">Issues to fix:</p>
-                    <ul className="text-xs text-orange-700 space-y-1">
-                      {drivers.filter((d) => !d.assignedTruckId).length > 0 && (
-                        <li>
-                          ⚠️ {drivers.filter((d) => !d.assignedTruckId).length} driver(s) have no
-                          truck assigned
-                        </li>
-                      )}
-                      {debugCounts.notAvailable.length > 0 && (
-                        <li>
-                          ⚠️ {debugCounts.notAvailable.length} driver(s) status:{' '}
-                          {[...new Set(debugCounts.notAvailable.map((d: any) => d.currentStatus))].join(', ')}
-                        </li>
-                      )}
-                    </ul>
-                  </div>
-                )}
-
-                <div className="flex gap-3 justify-center">
-                  <button
-                    onClick={() => router.push('/transport/drivers')}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2 rounded-lg transition-colors text-sm"
-                  >
-                    → Manage Drivers
-                  </button>
-                  <button
-                    onClick={() => {
-                      // Force-reset all TSP drivers to AVAILABLE for demo
-                      drivers.forEach((d) =>
-                        updateDriver?.(d.id, { currentStatus: 'AVAILABLE' })
-                      );
-                      loadData(user);
-                    }}
-                    className="bg-orange-500 hover:bg-orange-600 text-white font-semibold px-5 py-2 rounded-lg transition-colors text-sm"
-                  >
-                    🔄 Reset All to Available
-                  </button>
-                </div>
+              <div className="space-y-2 mb-5">
+                <p className="text-sm font-semibold text-gray-700 mb-2">Select truck ({idleTrucks.length} available):</p>
+                {idleTrucks.map((truck: any) => {
+                  const driver = drivers.find((d: any) => d.id === truck.assignedDriverId);
+                  const isSelected = selectedTruck === truck.id;
+                  return (
+                    <button
+                      key={truck.id}
+                      onClick={() => setSelectedTruck(truck.id)}
+                      className={`w-full text-left p-4 rounded-xl border-2 transition-all ${isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-bold text-gray-900">{truck.registrationNumber}</p>
+                            <span className="text-xs text-emerald-600 font-medium bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">IDLE</span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {truck.compartments?.length} compartments · {truck.capacity?.toLocaleString()}L capacity
+                          </p>
+                          {driver && <p className="text-xs text-blue-600 mt-0.5">👤 {driver.firstName} {driver.lastName}</p>}
+                        </div>
+                        {isSelected && <span className="text-blue-600 font-bold text-lg">✓</span>}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             )}
 
-            <button
-              onClick={() => { setShowAssignModal(false); setSelectedDriverId(''); }}
-              className="w-full mt-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 rounded-xl transition-colors"
-            >
-              Cancel
-            </button>
+            <div className="flex gap-3">
+              <button onClick={() => setAssigning(null)} className="flex-1 border border-gray-200 text-gray-700 font-medium py-2.5 rounded-xl hover:bg-gray-50 transition text-sm">
+                Cancel
+              </button>
+              <button
+                onClick={handleAssignTruck}
+                disabled={!selectedTruck}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-bold py-2.5 rounded-xl transition text-sm"
+              >
+                Confirm Assignment
+              </button>
+            </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Sub-components ────────────────────────────────────────────
+
+function SectionTitle({ icon, label, count }: { icon: string; label: string; count: number }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span>{icon}</span>
+      <h2 className="font-bold text-gray-900">{label}</h2>
+      <span className="text-xs font-semibold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{count}</span>
+    </div>
+  );
+}
+
+function OrderCard({ order, children }: { order: any; children: React.ReactNode }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <p className="font-bold text-gray-900">Order #{order.id.slice(0, 8)}</p>
+          <p className="text-xs text-gray-400 mt-0.5">{order.clientName}</p>
+        </div>
+        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
+          {STATUS_LABEL[order.status] ?? order.status}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 mb-4 text-sm">
+        <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-100">
+          <p className="text-xs text-gray-400">Fuel</p>
+          <p className="font-semibold text-gray-900">{order.volume?.toLocaleString()}L {order.fuelType}</p>
+        </div>
+        <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-100">
+          <p className="text-xs text-gray-400">Destination</p>
+          <p className="font-semibold text-gray-900 text-xs truncate">{order.destinationName}</p>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function JourneyProgress({ status }: { status: string }) {
+  const steps = [
+    { key: 'ASSIGNED',  label: 'Assigned' },
+    { key: 'EN_ROUTE',  label: 'En Route' },
+    { key: 'ARRIVED',   label: 'Arrived'  },
+    { key: 'COMPLETED', label: 'Delivered'},
+  ];
+  const idx = steps.findIndex(s => s.key === status);
+  return (
+    <div className="flex items-center gap-0">
+      {steps.map((step, i) => {
+        const done    = i < idx;
+        const current = i === idx;
+        return (
+          <div key={step.key} className="flex items-center flex-1">
+            <div className="flex flex-col items-center">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
+                done    ? 'bg-emerald-500 text-white' :
+                current ? 'bg-blue-600 text-white ring-4 ring-blue-100' :
+                          'bg-gray-200 text-gray-400'
+              }`}>
+                {done ? '✓' : i + 1}
+              </div>
+              <p className={`text-[10px] mt-1 font-medium ${current ? 'text-blue-600' : done ? 'text-emerald-600' : 'text-gray-400'}`}>
+                {step.label}
+              </p>
+            </div>
+            {i < steps.length - 1 && (
+              <div className={`flex-1 h-0.5 mx-1 mb-3.5 ${i < idx ? 'bg-emerald-400' : 'bg-gray-200'}`} />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -15,6 +15,47 @@ import {
   Driver,
 } from '@/src/types';
 
+// ── Demo version — bump this to force a full localStorage reset ──
+const DEMO_VERSION = 'v3.5';
+const VERSION_KEY  = 'fuel_demo_version';
+
+// ── Fuel Anomaly (theft detection) ───────────────────────────
+export interface FuelAnomaly {
+  id: string;
+  orderId: string;
+  truckReg: string;
+  compartment: string;
+  fuelDropLiters: number;
+  location: string;
+  detectedAt: Date;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  status: 'OPEN' | 'REVIEWING' | 'RESOLVED';
+}
+
+const ANOMALY_KEY = 'fuel_anomalies';
+
+export const getFuelAnomalies = (): FuelAnomaly[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(ANOMALY_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw).map((a: any) => ({ ...a, detectedAt: new Date(a.detectedAt) }));
+  } catch { return []; }
+};
+
+export const addFuelAnomaly = (anomaly: FuelAnomaly) => {
+  if (typeof window === 'undefined') return;
+  const existing = getFuelAnomalies();
+  existing.push(anomaly);
+  localStorage.setItem(ANOMALY_KEY, JSON.stringify(existing));
+};
+
+export const updateFuelAnomaly = (id: string, updates: Partial<FuelAnomaly>) => {
+  if (typeof window === 'undefined') return;
+  const items = getFuelAnomalies().map(a => a.id === id ? { ...a, ...updates } : a);
+  localStorage.setItem(ANOMALY_KEY, JSON.stringify(items));
+};
+
 // FIXED DEPOT LOCATION
 export const FIXED_DEPOT = {
   id: 'depot-seeb',
@@ -29,7 +70,7 @@ export const FIXED_DEPOT = {
 export const DELIVERY_ZONES = [
   {
     id: 'qurum-station',
-    name: 'Qurum Station A',
+    name: 'Station A',
     lat: 23.612703,
     lng: 58.498615,
     radius: 250,
@@ -39,63 +80,13 @@ export const DELIVERY_ZONES = [
   },
   {
     id: 'khuwair-station',
-    name: 'Al Khuwair Station B',
+    name: 'Station B',
     lat: 23.586549,
     lng: 58.431447,
     radius: 250,
     clientName: 'Client 2',
     address: 'Al Khuwair, Muscat, Oman',
     type: 'Petrol Station',
-  },
-  {
-    id: 'rusayl-station',
-    name: 'Rusayl Industrial Estate Station C',
-    lat: 23.556700,
-    lng: 58.203590,
-    radius: 300,
-    clientName: 'Client 1',
-    address: 'Rusayl, Muscat, Oman',
-    type: 'Industrial',
-  },
-  {
-    id: 'al-amrat-station',
-    name: 'Al Amrat Station E',
-    lat: 23.500920,
-    lng: 58.393880,
-    radius: 260,
-    clientName: 'Client 2',
-    address: 'Al Amrat, Muscat, Oman',
-    type: 'Petrol Station',
-  },
-  {
-    id: 'bowshar-station',
-    name: 'Bowshar Service Station F',
-    lat: 23.577510,
-    lng: 58.454210,
-    radius: 240,
-    clientName: 'Client 1',
-    address: 'Bowshar, Muscat, Oman',
-    type: 'Petrol Station',
-  },
-  {
-    id: 'muttrah-station',
-    name: 'Muttrah Port Station G',
-    lat: 23.616300,
-    lng: 58.565450,
-    radius: 300,
-    clientName: 'Client 2',
-    address: 'Muttrah Port, Muscat, Oman',
-    type: 'Port',
-  },
-  {
-    id: 'airport-station',
-    name: 'Muscat Airport Fuel Station H',
-    lat: 23.593300,
-    lng: 58.284440,
-    radius: 320,
-    clientName: 'Client 1',
-    address: 'Muscat Airport, Oman',
-    type: 'Airport',
   },
 ];
 
@@ -267,7 +258,10 @@ const DEMO_TRUCKS: Truck[] = [
     status: 'IDLE',
     currentLat: 23.670250,
     currentLng: 58.189120,
-    qrCode: 'QR-TRUCK-001-ANPTCO',
+    qrCode: 'QR-TRK-001',
+    sensorConfigured: true,
+    commercialApproval: true,
+    safetyApproval: true,
     createdAt: new Date('2026-01-15'),
   },
   {
@@ -285,7 +279,10 @@ const DEMO_TRUCKS: Truck[] = [
     status: 'IDLE',
     currentLat: 23.670250,
     currentLng: 58.189120,
-    qrCode: 'QR-TRUCK-002-ANPTCO',
+    qrCode: 'QR-TRK-002',
+    sensorConfigured: true,
+    commercialApproval: true,
+    safetyApproval: true,
     createdAt: new Date('2026-01-20'),
   },
   {
@@ -302,7 +299,10 @@ const DEMO_TRUCKS: Truck[] = [
     status: 'IDLE',
     currentLat: 23.670250,
     currentLng: 58.189120,
-    qrCode: 'QR-TRUCK-003-ANPTCO',
+    qrCode: 'QR-TRK-003',
+    sensorConfigured: true,
+    commercialApproval: true,
+    safetyApproval: true,
     createdAt: new Date('2026-01-25'),
   },
   {
@@ -324,6 +324,9 @@ const DEMO_TRUCKS: Truck[] = [
     createdAt: new Date('2026-02-08'),
   },
 ];
+
+// Orders start empty — placed fresh by clients during the demo
+const DEMO_ORDERS: Order[] = [];
 
 // ── Demo Sensor Requests ──────────────────────────────────────
 const DEMO_SENSOR_REQUESTS: SensorIntegrationRequest[] = [
@@ -421,52 +424,90 @@ const getDemoKYC = (): KYCDocument[] => {
   ];
 };
 
+// ── Demo Notifications (seeded) ───────────────────────────────
+const DEMO_NOTIFICATIONS: Notification[] = [
+  {
+    id: 'notif-welcome-seller',
+    userId: 'seller-001',
+    type: 'SYSTEM',
+    title: '👋 Welcome to FuelFleet Demo',
+    message: 'Clients will place orders and you will receive a notification here instantly.',
+    read: false,
+    createdAt: new Date(Date.now() - 2 * 60 * 1000),
+  },
+  {
+    id: 'notif-welcome-tsp1',
+    userId: 'tsp-001',
+    type: 'SYSTEM',
+    title: '👋 Welcome, Transporter 1',
+    message: 'Orders assigned to you will appear here. Assign trucks and manage deliveries.',
+    read: false,
+    createdAt: new Date(Date.now() - 2 * 60 * 1000),
+  },
+  {
+    id: 'notif-welcome-tsp2',
+    userId: 'tsp-002',
+    type: 'SYSTEM',
+    title: '👋 Welcome, Transporter 2',
+    message: 'TRK-004 is pending sensor integration. Check your tickets for next steps.',
+    read: false,
+    createdAt: new Date(Date.now() - 2 * 60 * 1000),
+  },
+  {
+    id: 'notif-welcome-client1',
+    userId: 'client-001',
+    type: 'SYSTEM',
+    title: '👋 Welcome, Client 1',
+    message: 'Ready to order? Click "Place Order" to request fuel delivery.',
+    read: false,
+    createdAt: new Date(Date.now() - 2 * 60 * 1000),
+  },
+  {
+    id: 'notif-welcome-client2',
+    userId: 'client-002',
+    type: 'SYSTEM',
+    title: '👋 Welcome, Client 2',
+    message: 'Ready to order? Click "Place Order" to request fuel delivery.',
+    read: false,
+    createdAt: new Date(Date.now() - 2 * 60 * 1000),
+  },
+];
+
 // ── Initialize storage ────────────────────────────────────────
 const initializeStorage = () => {
   if (typeof window === 'undefined') return;
 
-  if (!localStorage.getItem(STORAGE_KEYS.USERS))
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(DEMO_USERS));
-
-  if (!localStorage.getItem(STORAGE_KEYS.WORKSPACES))
-    localStorage.setItem(STORAGE_KEYS.WORKSPACES, JSON.stringify(DEMO_WORKSPACES));
-
-  if (!localStorage.getItem(STORAGE_KEYS.TRUCKS))
-    localStorage.setItem(STORAGE_KEYS.TRUCKS, JSON.stringify(DEMO_TRUCKS));
-
-  if (!localStorage.getItem(STORAGE_KEYS.SENSOR_REQUESTS))
-    localStorage.setItem(STORAGE_KEYS.SENSOR_REQUESTS, JSON.stringify(DEMO_SENSOR_REQUESTS));
-
-  if (!localStorage.getItem(STORAGE_KEYS.ORDERS))
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify([]));
-
-  if (!localStorage.getItem(STORAGE_KEYS.KYC))
-    localStorage.setItem(STORAGE_KEYS.KYC, JSON.stringify(getDemoKYC()));
-
-  if (!localStorage.getItem(STORAGE_KEYS.TICKETS))
-    localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify([]));
-
-  if (!localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS))
-    localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify([]));
-
-  if (!localStorage.getItem(STORAGE_KEYS.DRIVERS))
-    localStorage.setItem(STORAGE_KEYS.DRIVERS, JSON.stringify(DEMO_DRIVERS));
-
-  if (!localStorage.getItem(STORAGE_KEYS.SELLER_CONNECTIONS))
-    localStorage.setItem(STORAGE_KEYS.SELLER_CONNECTIONS, JSON.stringify(DEMO_CONNECTIONS));
-
-  if (!localStorage.getItem(STORAGE_KEYS.SELLER_CODES))
-    localStorage.setItem(STORAGE_KEYS.SELLER_CODES, JSON.stringify(DEMO_CODES));
+  localStorage.setItem(STORAGE_KEYS.USERS,             JSON.stringify(DEMO_USERS));
+  localStorage.setItem(STORAGE_KEYS.WORKSPACES,        JSON.stringify(DEMO_WORKSPACES));
+  localStorage.setItem(STORAGE_KEYS.TRUCKS,            JSON.stringify(DEMO_TRUCKS));
+  localStorage.setItem(STORAGE_KEYS.SENSOR_REQUESTS,   JSON.stringify(DEMO_SENSOR_REQUESTS));
+  localStorage.setItem(STORAGE_KEYS.ORDERS,            JSON.stringify(DEMO_ORDERS));
+  localStorage.setItem(STORAGE_KEYS.KYC,               JSON.stringify(getDemoKYC()));
+  localStorage.setItem(STORAGE_KEYS.TICKETS,           JSON.stringify([]));
+  localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS,     JSON.stringify(DEMO_NOTIFICATIONS));
+  localStorage.setItem(STORAGE_KEYS.DRIVERS,           JSON.stringify(DEMO_DRIVERS));
+  localStorage.setItem(STORAGE_KEYS.SELLER_CONNECTIONS,JSON.stringify(DEMO_CONNECTIONS));
+  localStorage.setItem(STORAGE_KEYS.SELLER_CODES,      JSON.stringify(DEMO_CODES));
+  localStorage.removeItem(ANOMALY_KEY);
 };
 
 export const resetDemoData = () => {
   if (typeof window === 'undefined') return;
   Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
+  localStorage.removeItem(VERSION_KEY);
+  localStorage.removeItem(ANOMALY_KEY);
   initializeStorage();
+  localStorage.setItem(VERSION_KEY, DEMO_VERSION);
 };
 
 if (typeof window !== 'undefined') {
-  initializeStorage();
+  // Auto-reset if demo version changed
+  if (localStorage.getItem(VERSION_KEY) !== DEMO_VERSION) {
+    Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
+    localStorage.removeItem(ANOMALY_KEY);
+    initializeStorage();
+    localStorage.setItem(VERSION_KEY, DEMO_VERSION);
+  }
 }
 
 // ── Save helper ───────────────────────────────────────────────
@@ -663,6 +704,12 @@ export const addSensorRequest= (request: SensorIntegrationRequest) => { const d 
 export const addDriver       = (driver: Driver)                    => { const d = getDrivers();        d.push(driver);       saveToStorage(STORAGE_KEYS.DRIVERS,         d); };
 
 // ── Update functions ──────────────────────────────────────────
+export const markNotificationRead = (id: string) =>
+  saveToStorage(STORAGE_KEYS.NOTIFICATIONS, getNotifications().map(n => n.id === id ? { ...n, read: true } : n));
+
+export const markAllNotificationsRead = (userId: string) =>
+  saveToStorage(STORAGE_KEYS.NOTIFICATIONS, getNotifications().map(n => n.userId === userId ? { ...n, read: true } : n));
+
 export const updateUser          = (id: string, updates: Partial<User>)                     => { saveToStorage(STORAGE_KEYS.USERS,           getUsers().map(u          => u.id === id ? { ...u, ...updates } : u)); };
 export const updateWorkspace     = (id: string, updates: Partial<Workspace>)                => { saveToStorage(STORAGE_KEYS.WORKSPACES,      getWorkspaces().map(w     => w.id === id ? { ...w, ...updates } : w)); };
 export const updateOrder         = (id: string, updates: Partial<Order>)                    => { saveToStorage(STORAGE_KEYS.ORDERS,          getOrders().map(o         => o.id === id ? { ...o, ...updates } : o)); };

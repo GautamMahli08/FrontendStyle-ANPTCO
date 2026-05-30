@@ -1,260 +1,304 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
-import Header from '@/src/components/layout/Header';
-import StatusBadge from '@/src/components/workflow/StatusBadge';
-import { getCurrentUser, setCurrentUser, getUsers, getTrucks, getOrders } from '@/src/lib/demo-data';
+import Header  from '@/src/components/layout/Header';
+import { getCurrentUser, getTrucks, getOrders, getFuelAnomalies, updateFuelAnomaly } from '@/src/lib/demo-data';
+
+const SEVERITY_STYLE: Record<string, string> = {
+  HIGH:   'bg-red-100    text-red-700    border-red-300',
+  MEDIUM: 'bg-yellow-100 text-yellow-700 border-yellow-300',
+  LOW:    'bg-green-100  text-green-700  border-green-300',
+};
+const ANOMALY_STATUS_STYLE: Record<string, string> = {
+  OPEN:       'bg-red-500    text-white',
+  REVIEWING:  'bg-yellow-500 text-white',
+  RESOLVED:   'bg-emerald-500 text-white',
+};
+const TRUCK_STATUS_COLOR: Record<string, string> = {
+  IDLE:                'bg-emerald-100 text-emerald-700',
+  EN_ROUTE:            'bg-blue-100    text-blue-700',
+  ASSIGNED:            'bg-indigo-100  text-indigo-700',
+  ARRIVED:             'bg-teal-100    text-teal-700',
+  PENDING_INTEGRATION: 'bg-gray-100    text-gray-500',
+  ACTIVE:              'bg-emerald-100 text-emerald-700',
+};
 
 export default function FleetMonitorPage() {
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
-  const [mounted, setMounted] = useState(false);
-  const [trucks, setTrucks] = useState<any[]>([]);
-  const [orders, setOrders] = useState<any[]>([]);
-  const [selectedTruck, setSelectedTruck] = useState<any>(null);
+  const [user,      setUser]      = useState<any>(null);
+  const [trucks,    setTrucks]    = useState<any[]>([]);
+  const [orders,    setOrders]    = useState<any[]>([]);
+  const [anomalies, setAnomalies] = useState<any[]>([]);
+  const [selected,  setSelected]  = useState<string | null>(null);
+  const [mounted,   setMounted]   = useState(false);
+
+  const load = useCallback((u: any) => {
+    const allTrucks = getTrucks();
+    setTrucks(allTrucks.filter((t: any) => t.workspaceId === u.workspaceId));
+    setOrders(getOrders().filter((o: any) => o.workspaceId === u.workspaceId));
+    setAnomalies(getFuelAnomalies());
+  }, []);
 
   useEffect(() => {
     setMounted(true);
-    const currentUser = getCurrentUser();
-    setUser(currentUser);
-    
-    if (currentUser) {
-      loadData(currentUser);
-    }
-  }, []);
+    const u = getCurrentUser();
+    if (!u || u.role !== 'SELLER_MANAGER') { router.push('/'); return; }
+    setUser(u);
+    load(u);
+    const iv = setInterval(() => load(u), 3000);
+    return () => clearInterval(iv);
+  }, [router, load]);
 
-  const loadData = (currentUser: any) => {
-    const allTrucks = getTrucks();
-    const allOrders = getOrders();
-    
-    setTrucks(allTrucks);
-    setOrders(allOrders.filter(o => o.workspaceId === currentUser?.workspaceId));
-  };
+  if (!mounted || !user) return null;
 
-  const handleRoleChange = (userId: string) => {
-    const users = getUsers();
-    const newUser = users.find(u => u.id === userId);
-    if (newUser) {
-      setUser(newUser);
-      setCurrentUser(newUser);
-      
-      const routes: Record<string, string> = {
-        PLATFORM_ADMIN: '/platform-admin/dashboard',
-        SELLER_MANAGER: '/seller/dashboard',
-        TRANSPORT_ADMIN: '/transport/dashboard',
-        CLIENT: '/client/dashboard',
-        DRIVER: '/driver/dashboard',
-      };
-      router.push(routes[newUser.role]);
-    }
-  };
-
-  if (!mounted) return null;
-  
-  if (!user) {
-    router.push('/');
-    return null;
-  }
-  
-  if (user.role !== 'SELLER_MANAGER') {
-    router.push('/');
-    return null;
-  }
-
-  const activeTrucks = trucks.filter(t => ['EN_ROUTE', 'ASSIGNED'].includes(t.status));
-  const idleTrucks = trucks.filter(t => t.status === 'IDLE');
+  const openAnomalies = anomalies.filter(a => a.status !== 'RESOLVED');
+  const enRoute       = trucks.filter(t => t.status === 'EN_ROUTE');
+  const idle          = trucks.filter(t => t.status === 'IDLE');
+  const selectedTruck = trucks.find(t => t.id === selected);
+  const selectedOrder = selectedTruck
+    ? orders.find(o => o.assignedTruckId === selectedTruck.id && !['COMPLETED', 'CANCELLED'].includes(o.status))
+    : null;
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-slate-50">
       <Sidebar userRole={user.role} />
-      
-      <div className="flex-1">
+
+      <div className="flex-1 min-w-0">
         <Header user={user} />
-        
-        <main className="p-8">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Fleet Monitor 🗺️</h1>
-            <p className="text-gray-600">Real-time tracking of all trucks in the system</p>
-          </div>
 
-          {/* Stats */}
-          <div className="grid grid-cols-4 gap-6 mb-8">
-            <div className="bg-white rounded-lg p-6 border border-gray-200">
-              <p className="text-sm text-gray-600 mb-1">Total Trucks</p>
-              <p className="text-3xl font-bold text-gray-900">{trucks.length}</p>
+        <main className="p-6 space-y-6">
+
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-black text-gray-900">Fleet Monitor</h1>
+              <p className="text-sm text-gray-500 mt-0.5">Live status · auto-refreshes every 3s</p>
             </div>
-            <div className="bg-white rounded-lg p-6 border border-gray-200">
-              <p className="text-sm text-gray-600 mb-1">Active</p>
-              <p className="text-3xl font-bold text-blue-600">{activeTrucks.length}</p>
-            </div>
-            <div className="bg-white rounded-lg p-6 border border-gray-200">
-              <p className="text-sm text-gray-600 mb-1">Idle</p>
-              <p className="text-3xl font-bold text-green-600">{idleTrucks.length}</p>
-            </div>
-            <div className="bg-white rounded-lg p-6 border border-gray-200">
-              <p className="text-sm text-gray-600 mb-1">Active Deliveries</p>
-              <p className="text-3xl font-bold text-orange-600">
-                {orders.filter(o => ['EN_ROUTE', 'ARRIVED'].includes(o.status)).length}
-              </p>
+            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600">
+              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+              LIVE
             </div>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
-            {/* Map View */}
-            <div className="md:col-span-2 bg-white rounded-xl border border-gray-200">
-              <div className="p-6 border-b border-gray-200">
-                <h2 className="text-xl font-bold text-gray-900">Live Map View</h2>
-              </div>
-              <div className="p-6">
-                <div className="bg-gray-100 rounded-lg flex items-center justify-center" style={{ height: '500px' }}>
-                  <div className="text-center">
-                    <div className="text-6xl mb-4">🗺️</div>
-                    <p className="text-gray-600 font-medium">Interactive Map</p>
-                    <p className="text-sm text-gray-500 mt-2">
-                      Showing {activeTrucks.length} active truck{activeTrucks.length !== 1 ? 's' : ''}
-                    </p>
-                  </div>
+          {/* KPIs */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <KpiTile label="Total Trucks"  value={trucks.length}          icon="🚛" color="slate"  />
+            <KpiTile label="En Route"      value={enRoute.length}         icon="📡" color="blue"   />
+            <KpiTile label="Idle & Ready"  value={idle.length}            icon="✅" color="green"  />
+            <KpiTile label="Theft Alerts"  value={openAnomalies.length}   icon="🚨" color="red"    highlight={openAnomalies.length > 0} />
+          </div>
+
+          {/* ── THEFT ALERTS PANEL ── */}
+          {openAnomalies.length > 0 && (
+            <section className="bg-white border-2 border-red-200 rounded-2xl overflow-hidden shadow-sm">
+              <div className="flex items-center gap-3 px-6 py-4 bg-red-50 border-b border-red-200">
+                <div className="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center text-lg flex-shrink-0">🚨</div>
+                <div className="flex-1">
+                  <h2 className="font-bold text-red-800">Fuel Anomaly Alerts</h2>
+                  <p className="text-xs text-red-600 mt-0.5">Unexpected fuel drops detected outside delivery windows</p>
                 </div>
+                <span className="text-xs font-black text-red-700 bg-red-200 px-2.5 py-1 rounded-full">
+                  {openAnomalies.length} OPEN
+                </span>
               </div>
-            </div>
-
-            {/* Truck List */}
-            <div className="bg-white rounded-xl border border-gray-200">
-              <div className="p-6 border-b border-gray-200">
-                <h2 className="text-xl font-bold text-gray-900">Active Trucks</h2>
-              </div>
-              <div className="overflow-y-auto" style={{ maxHeight: '500px' }}>
-                {activeTrucks.length > 0 ? (
-                  <div className="divide-y divide-gray-200">
-                    {activeTrucks.map((truck) => {
-                      const order = orders.find(o => o.assignedTruckId === truck.id && !['COMPLETED', 'CANCELLED'].includes(o.status));
-                      
-                      return (
-                        <button
-                          key={truck.id}
-                          onClick={() => setSelectedTruck(truck)}
-                          className={`w-full text-left p-4 hover:bg-blue-50 transition-colors ${
-                            selectedTruck?.id === truck.id ? 'bg-blue-50' : ''
-                          }`}
-                        >
-                          <div className="flex items-start justify-between mb-2">
-                            <div>
-                              <p className="font-semibold text-gray-900">{truck.registrationNumber}</p>
-                              <p className="text-xs text-gray-600">{truck.driverName}</p>
-                            </div>
-                            <StatusBadge status={truck.status} />
-                          </div>
-                          {order && (
-                            <div className="bg-gray-50 rounded p-2 text-xs">
-                              <p className="text-gray-700">
-                                Order #{order.id.slice(0, 8)}
-                              </p>
-                              <p className="text-gray-600">
-                                {order.volume}L {order.fuelType}
-                              </p>
-                              <p className="text-gray-600">
-                                → {order.destinationName}
-                              </p>
-                            </div>
-                          )}
-                          <div className="text-xs text-gray-500 mt-2">
-                            📍 {truck.currentLat?.toFixed(4)}, {truck.currentLng?.toFixed(4)}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="p-12 text-center">
-                    <span className="text-4xl mb-2 block">🚛</span>
-                    <p className="text-sm text-gray-600">No active trucks</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Idle Trucks */}
-          {idleTrucks.length > 0 && (
-            <div className="mt-8 bg-white rounded-xl border border-gray-200">
-              <div className="p-6 border-b border-gray-200">
-                <h2 className="text-xl font-bold text-gray-900">Idle Trucks ({idleTrucks.length})</h2>
-              </div>
-              <div className="p-6">
-                <div className="grid md:grid-cols-3 gap-4">
-                  {idleTrucks.map((truck) => (
-                    <div key={truck.id} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                      <div className="flex items-start justify-between mb-2">
-                        <div>
-                          <p className="font-semibold text-gray-900">{truck.registrationNumber}</p>
-                          <p className="text-sm text-gray-600">{truck.driverName}</p>
-                        </div>
-                        <StatusBadge status={truck.status} />
+              <div className="divide-y divide-gray-50">
+                {anomalies.map(a => (
+                  <div key={a.id} className="flex items-center gap-4 px-6 py-4 hover:bg-slate-50 transition">
+                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                      a.severity === 'HIGH' ? 'bg-red-500 animate-pulse' :
+                      a.severity === 'MEDIUM' ? 'bg-yellow-500' : 'bg-green-500'
+                    }`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                        <p className="font-bold text-gray-900 text-sm">{a.truckReg}</p>
+                        <span className="text-xs text-gray-500">{a.compartment}</span>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${SEVERITY_STYLE[a.severity]}`}>
+                          {a.severity}
+                        </span>
                       </div>
-                      <div className="text-xs text-gray-500">
-                        📍 {truck.currentLat?.toFixed(4)}, {truck.currentLng?.toFixed(4)}
+                      <p className="text-xs text-gray-500">{a.location}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-sm font-black text-red-600">−{a.fuelDropLiters}L</p>
+                      <p className="text-xs text-gray-400">{new Date(a.detectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                    </div>
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${ANOMALY_STATUS_STYLE[a.status]}`}>
+                      {a.status}
+                    </span>
+                    {a.status === 'OPEN' && (
+                      <button
+                        onClick={() => { updateFuelAnomaly(a.id, { status: 'REVIEWING' }); load(user); }}
+                        className="text-xs font-semibold text-blue-600 hover:text-blue-700 px-3 py-1 border border-blue-200 rounded-lg hover:bg-blue-50 transition flex-shrink-0"
+                      >
+                        Review
+                      </button>
+                    )}
+                    {a.status === 'REVIEWING' && (
+                      <button
+                        onClick={() => { updateFuelAnomaly(a.id, { status: 'RESOLVED' }); load(user); }}
+                        className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 px-3 py-1 border border-emerald-200 rounded-lg hover:bg-emerald-50 transition flex-shrink-0"
+                      >
+                        Resolve
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* ── FLEET TABLE + DETAIL PANEL ── */}
+          <div className="grid lg:grid-cols-3 gap-6">
+
+            {/* Truck list */}
+            <div className="lg:col-span-2 bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="font-bold text-gray-900">Live Fleet</h2>
+                <span className="text-xs text-gray-400">{trucks.length} trucks</span>
+              </div>
+              <div className="divide-y divide-gray-50">
+                {trucks.map(truck => {
+                  const order = orders.find(o => o.assignedTruckId === truck.id && !['COMPLETED', 'CANCELLED'].includes(o.status));
+                  const hasAlert = anomalies.some(a => a.truckReg === truck.registrationNumber && a.status !== 'RESOLVED');
+                  const isSelected = selected === truck.id;
+                  return (
+                    <button
+                      key={truck.id}
+                      onClick={() => setSelected(isSelected ? null : truck.id)}
+                      className={`w-full flex items-center gap-4 px-6 py-4 text-left transition hover:bg-slate-50 ${isSelected ? 'bg-blue-50' : ''}`}
+                    >
+                      <div className="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center text-lg flex-shrink-0">
+                        🚛
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <p className="font-bold text-gray-900 text-sm">{truck.registrationNumber}</p>
+                          {hasAlert && (
+                            <span className="text-[10px] font-black text-red-600 bg-red-100 px-1.5 py-0.5 rounded-full border border-red-200 animate-pulse">
+                              🚨 ALERT
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500">{truck.tspName}</p>
+                        {order && <p className="text-xs text-blue-600 mt-0.5 truncate">→ {order.destinationName}</p>}
+                      </div>
+                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                        <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${TRUCK_STATUS_COLOR[truck.status] ?? 'bg-gray-100 text-gray-500'}`}>
+                          {truck.status?.replace(/_/g, ' ')}
+                        </span>
+                        <p className="text-xs text-gray-400">{truck.compartments?.length}C · {truck.capacity?.toLocaleString()}L</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Detail panel */}
+            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+              {selectedTruck ? (
+                <>
+                  <div className="px-5 py-4 border-b border-gray-100 bg-slate-50">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center text-xl">🚛</div>
+                      <div>
+                        <p className="font-bold text-gray-900">{selectedTruck.registrationNumber}</p>
+                        <p className="text-xs text-gray-500">{selectedTruck.tspName}</p>
                       </div>
                     </div>
-                  ))}
+                  </div>
+                  <div className="p-5 space-y-4">
+
+                    {/* Status */}
+                    <div>
+                      <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">Status</p>
+                      <span className={`text-sm font-bold px-3 py-1 rounded-full ${TRUCK_STATUS_COLOR[selectedTruck.status] ?? 'bg-gray-100 text-gray-500'}`}>
+                        {selectedTruck.status?.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+
+                    {/* Compartments */}
+                    <div>
+                      <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">Compartments</p>
+                      <div className="space-y-2">
+                        {selectedTruck.compartments?.map((c: any) => (
+                          <div key={c.id} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                            <div className="flex justify-between text-xs mb-1">
+                              <span className="font-medium text-gray-700">C{c.id} · {c.fuelType}</span>
+                              <span className="font-bold text-gray-900">{c.capacity?.toLocaleString()}L cap.</span>
+                            </div>
+                            {c.currentVolume > 0 && (
+                              <>
+                                <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-blue-500 rounded-full"
+                                    style={{ width: `${Math.round((c.currentVolume / c.capacity) * 100)}%` }}
+                                  />
+                                </div>
+                                <p className="text-xs text-gray-400 mt-1">{c.currentVolume?.toLocaleString()}L loaded</p>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Active order */}
+                    {selectedOrder && (
+                      <div>
+                        <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">Current Order</p>
+                        <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
+                          <p className="text-sm font-bold text-blue-900">#{selectedOrder.id.slice(0, 8)}</p>
+                          <p className="text-xs text-blue-700 mt-0.5">{selectedOrder.volume?.toLocaleString()}L {selectedOrder.fuelType}</p>
+                          <p className="text-xs text-blue-600 mt-0.5">→ {selectedOrder.destinationName}</p>
+                          <p className="text-xs text-blue-500 mt-0.5">Client: {selectedOrder.clientName}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* QR */}
+                    {selectedTruck.qrCode && (
+                      <div>
+                        <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">QR Code</p>
+                        <p className="font-mono text-xs bg-slate-100 px-3 py-2 rounded-lg text-gray-700 border border-slate-200">
+                          {selectedTruck.qrCode}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full min-h-64 text-center p-8">
+                  <p className="text-3xl mb-3">👆</p>
+                  <p className="text-sm font-semibold text-gray-700">Select a truck</p>
+                  <p className="text-xs text-gray-400 mt-1">Click any row to see compartment details and active order</p>
                 </div>
-              </div>
+              )}
             </div>
-          )}
-
-          {/* Selected Truck Details */}
-          {selectedTruck && (
-            <div className="fixed bottom-4 right-4 bg-white rounded-xl shadow-2xl p-6 border-2 border-blue-500 w-96 z-50">
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h3 className="text-lg font-bold text-gray-900">{selectedTruck.registrationNumber}</h3>
-                  <p className="text-sm text-gray-600">{selectedTruck.driverName}</p>
-                </div>
-                <button
-                  onClick={() => setSelectedTruck(null)}
-                  className="text-gray-500 hover:text-gray-700"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="space-y-3 text-sm">
-                <div>
-                  <p className="text-gray-600">Status</p>
-                  <StatusBadge status={selectedTruck.status} />
-                </div>
-                <div>
-                  <p className="text-gray-600">Driver Phone</p>
-                  <p className="font-medium">{selectedTruck.driverPhone}</p>
-                </div>
-                <div>
-                  <p className="text-gray-600">Compartments</p>
-                  <p className="font-medium">{selectedTruck.compartments?.length || 0}</p>
-                </div>
-                <div>
-                  <p className="text-gray-600">Current Location</p>
-                  <p className="font-mono text-xs">
-                    {selectedTruck.currentLat?.toFixed(6)}, {selectedTruck.currentLng?.toFixed(6)}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 pt-4 border-t border-gray-200">
-                <button
-                  onClick={() => {
-                    // Center map on truck (future implementation)
-                    alert(`Centering map on ${selectedTruck.registrationNumber}`);
-                  }}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors"
-                >
-                  📍 Center on Map
-                </button>
-              </div>
-            </div>
-          )}
+          </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+function KpiTile({ label, value, icon, color, highlight }: {
+  label: string; value: number; icon: string; color: string; highlight?: boolean;
+}) {
+  const colors: Record<string, string> = {
+    slate: 'bg-slate-50  border-slate-200',
+    blue:  'bg-blue-50   border-blue-200',
+    green: 'bg-emerald-50 border-emerald-200',
+    red:   'bg-red-50    border-red-200',
+  };
+  return (
+    <div className={`relative flex flex-col items-center justify-center p-5 rounded-2xl border-2 ${colors[color] ?? 'bg-gray-50 border-gray-200'}`}>
+      {highlight && <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />}
+      <span className="text-2xl mb-1">{icon}</span>
+      <p className="text-3xl font-black text-gray-900">{value}</p>
+      <p className="text-xs text-gray-500 text-center mt-0.5">{label}</p>
     </div>
   );
 }

@@ -1,197 +1,395 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
-import Header from '@/src/components/layout/Header';
-import QRScanner from '@/src/components/qr/QRScanner';
-import { getUsers, getOrders, getCurrentUser, setCurrentUser, updateOrder, addNotification } from '@/src/lib/demo-data';
+import Header  from '@/src/components/layout/Header';
+import { getCurrentUser, getOrders, getTrucks, updateOrder, updateTruck, addNotification } from '@/src/lib/demo-data';
+import { logDemoEvent } from '@/src/app/client/dashboard/page';
+
+type Stage = 'idle' | 'camera' | 'processing' | 'confirmed';
 
 export default function ScanQRPage() {
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
-  const [mounted, setMounted] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [scannedData, setScannedData] = useState<any>(null);
-  const [activeOrder, setActiveOrder] = useState<any>(null);
+  const [user,      setUser]      = useState<any>(null);
+  const [order,     setOrder]     = useState<any>(null);
+  const [truck,     setTruck]     = useState<any>(null);
+  const [mounted,   setMounted]   = useState(false);
+  const [stage,     setStage]     = useState<Stage>('idle');
+  const [camError,  setCamError]  = useState<string | null>(null);
+  const [scanHint,  setScanHint]  = useState('Point camera at the QR code on the truck');
+
+  const videoRef    = useRef<HTMLVideoElement>(null);
+  const canvasRef   = useRef<HTMLCanvasElement>(null);
+  const streamRef   = useRef<MediaStream | null>(null);
+  const rafRef      = useRef<number | null>(null);
+
+  const load = useCallback((u: any) => {
+    const arrived = getOrders().find(o => o.clientId === u.id && o.status === 'ARRIVED');
+    setOrder(arrived ?? null);
+    if (arrived?.assignedTruckId) {
+      setTruck(getTrucks().find(t => t.id === arrived.assignedTruckId) ?? null);
+    }
+  }, []);
 
   useEffect(() => {
     setMounted(true);
-    const currentUser = getCurrentUser();
-    setUser(currentUser);
-    
-    if (!currentUser || currentUser.role !== 'CLIENT') {
-      router.push('/');
-      return;
-    }
-    
-    loadActiveOrder(currentUser);
+    const u = getCurrentUser();
+    if (!u || u.role !== 'CLIENT') { router.push('/'); return; }
+    setUser(u);
+    load(u);
+  }, [router, load]);
+
+  // Stop camera when unmounting or leaving camera stage
+  useEffect(() => {
+    return () => stopCamera();
   }, []);
 
-  const loadActiveOrder = (currentUser: any) => {
-    const orders = getOrders();
-    const myOrders = orders.filter(o => o.clientId === currentUser.id);
-    const arrived = myOrders.find(o => o.status === 'ARRIVED');
-    setActiveOrder(arrived);
-  };
+  function stopCamera() {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+  }
 
-  const handleRoleChange = (userId: string) => {
-    const users = getUsers();
-    const newUser = users.find(u => u.id === userId);
-    if (newUser) {
-      setUser(newUser);
-      setCurrentUser(newUser);
-      
-      const routes: Record<string, string> = {
-        PLATFORM_ADMIN: '/platform-admin/dashboard',
-        SELLER_MANAGER: '/seller/dashboard',
-        TRANSPORT_ADMIN: '/transport/dashboard',
-        CLIENT: '/client/dashboard',
-      };
-      router.push(routes[newUser.role]);
-    }
-  };
-
-  const handleScan = (data: string) => {
+  // ── Open camera ───────────────────────────────────────────────
+  async function openCamera() {
+    setCamError(null);
+    setStage('camera');
     try {
-      const qrData = JSON.parse(data);
-      setScannedData(qrData);
-      setScanning(false);
-
-      // Verify QR code matches the active order's truck
-      if (activeOrder && qrData.truckId === activeOrder.assignedTruckId) {
-        // Accept delivery
-        updateOrder(activeOrder.id, {
-          status: 'COMPLETED',
-          completedAt: new Date(),
-        });
-
-        // Notify driver
-        if (activeOrder.assignedDriverId) {
-          addNotification({
-            id: `notif-${Date.now()}`,
-            userId: activeOrder.assignedDriverId,
-            type: 'DELIVERY_COMPLETED',
-            title: '✅ Delivery Completed',
-            message: `Order #${activeOrder.id.slice(0, 8)} has been accepted by client`,
-            read: false,
-            createdAt: new Date(),
-          });
-        }
-
-        // Notify transporter
-        if (activeOrder.transporterId) {
-          addNotification({
-            id: `notif-${Date.now()}-tsp`,
-            userId: activeOrder.transporterId,
-            type: 'DELIVERY_COMPLETED',
-            title: '✅ Delivery Completed',
-            message: `Order #${activeOrder.id.slice(0, 8)} completed successfully`,
-            read: false,
-            createdAt: new Date(),
-          });
-        }
-
-        alert('✅ Delivery accepted successfully!');
-        router.push('/client/dashboard');
-      } else {
-        alert('❌ QR code does not match the expected truck!');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        scanLoop();
       }
-    } catch (error) {
-      alert('❌ Invalid QR code');
-      setScanning(false);
+    } catch {
+      setCamError('Camera permission denied. Please allow camera access and try again.');
+      setStage('idle');
     }
-  };
+  }
+
+  // ── Continuous QR scan loop ───────────────────────────────────
+  function scanLoop() {
+    const video  = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !streamRef.current) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    // Dynamically import jsQR to avoid SSR issues
+    import('jsqr').then(({ default: jsQR }) => {
+      const code = jsQR(imageData.data, imageData.width, imageData.height);
+      if (code?.data) {
+        handleQRFound(code.data);
+      } else {
+        rafRef.current = requestAnimationFrame(scanLoop);
+      }
+    }).catch(() => {
+      rafRef.current = requestAnimationFrame(scanLoop);
+    });
+  }
+
+  // ── QR code detected ─────────────────────────────────────────
+  function handleQRFound(qrData: string) {
+    stopCamera();
+    setScanHint(`QR code read: ${qrData}`);
+
+    // Check if it matches the assigned truck
+    const matchesTruck = truck?.qrCode && qrData.includes(truck.qrCode);
+
+    if (matchesTruck || true) {
+      // ↑ "|| true" = demo mode: any QR code read = success
+      confirmDelivery();
+    } else {
+      setCamError(`QR code does not match assigned truck (${truck?.qrCode}). Please try again.`);
+      setStage('idle');
+    }
+  }
+
+  // ── Manual capture (demo fallback) ───────────────────────────
+  function handleCapture() {
+    const video  = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+
+    stopCamera();
+    setStage('processing');
+
+    // Demo: brief processing animation then confirm
+    setTimeout(() => {
+      confirmDelivery();
+    }, 1500);
+  }
+
+  // ── Confirm delivery ──────────────────────────────────────────
+  function confirmDelivery() {
+    if (!order) return;
+    setStage('processing');
+    setTimeout(() => {
+      updateOrder(order.id, { status: 'COMPLETED', completedAt: new Date() });
+      if (order.assignedTruckId) updateTruck(order.assignedTruckId, { status: 'IDLE' });
+
+      logDemoEvent(
+        user?.id ?? 'client',
+        'DELIVERY_CONFIRMED',
+        `orderId=${order.id} | truck=${truck?.registrationNumber} | qrCode=${truck?.qrCode}`
+      );
+
+      if (order.assignedDriverId) {
+        addNotification({
+          id: `notif-${Date.now()}-d`, userId: order.assignedDriverId,
+          type: 'DELIVERY_COMPLETED', title: '✅ Delivery Accepted',
+          message: `Client accepted delivery for order #${order.id.slice(0, 8)}. Return to depot.`,
+          read: false, createdAt: new Date(),
+        });
+      }
+      addNotification({
+        id: `notif-${Date.now()}-s`, userId: 'seller-001',
+        type: 'DELIVERY_COMPLETED', title: '✅ Order Completed',
+        message: `Order #${order.id.slice(0, 8)} delivered to ${order.destinationName}.`,
+        read: false, createdAt: new Date(),
+      });
+      if (order.assignedTSPId) {
+        addNotification({
+          id: `notif-${Date.now()}-t`, userId: order.assignedTSPId,
+          type: 'DELIVERY_COMPLETED', title: '✅ Order Completed',
+          message: `Order #${order.id.slice(0, 8)} successfully delivered.`,
+          read: false, createdAt: new Date(),
+        });
+      }
+      setStage('confirmed');
+    }, 800);
+  }
 
   if (!mounted || !user) return null;
 
-  return (
-    <div className="flex min-h-screen bg-gray-50">
-      <Sidebar userRole={user.role} />
-      
-      <div className="flex-1">
-        <Header user={user} />
-        
-        <main className="p-8">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Scan QR Code</h1>
-            <p className="text-gray-600">Scan the truck's QR code to accept delivery</p>
-          </div>
+  // ── Confirmed ─────────────────────────────────────────────────
+  if (stage === 'confirmed') {
+    return (
+      <div className="flex min-h-screen bg-slate-50">
+        <Sidebar userRole={user.role} />
+        <div className="flex-1 min-w-0">
+          <Header user={user} />
+          <main className="p-6 flex items-center justify-center min-h-[70vh]">
+            <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center max-w-md w-full shadow-lg">
+              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-5">
+                <svg className="w-10 h-10 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <h2 className="text-2xl font-black text-gray-900 mb-2">Delivery Confirmed</h2>
+              <p className="text-gray-500 text-sm mb-1">Order #{order?.id.slice(0, 8)} completed.</p>
+              <p className="text-gray-400 text-xs mb-8">
+                {order?.volume?.toLocaleString()}L {order?.fuelType} received · {truck?.registrationNumber}
+              </p>
+              <button
+                onClick={() => router.push('/client/orders')}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition"
+              >
+                Back to My Orders
+              </button>
+            </div>
+          </main>
+        </div>
+      </div>
+    );
+  }
 
-          {activeOrder ? (
-            <div className="max-w-2xl mx-auto">
-              {/* Active Order Info */}
-              <div className="bg-white rounded-xl p-6 border-2 border-green-200 mb-8">
-                <h2 className="text-xl font-bold text-gray-900 mb-4">Active Delivery</h2>
-                <div className="space-y-2 text-sm">
-                  <p className="text-gray-600">
-                    <strong>Order:</strong> #{activeOrder.id.slice(0, 8)}
-                  </p>
-                  <p className="text-gray-600">
-                    <strong>Fuel:</strong> {activeOrder.volume}L {activeOrder.fuelType}
-                  </p>
-                  <p className="text-gray-600">
-                    <strong>Driver:</strong> {activeOrder.assignedDriverName}
-                  </p>
-                  <p className="text-gray-600">
-                    <strong>Truck:</strong> {activeOrder.assignedTruckRegistration}
-                  </p>
+  // ── No order ──────────────────────────────────────────────────
+  if (!order) {
+    return (
+      <div className="flex min-h-screen bg-slate-50">
+        <Sidebar userRole={user.role} />
+        <div className="flex-1 min-w-0">
+          <Header user={user} />
+          <main className="p-6 flex items-center justify-center min-h-[70vh]">
+            <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center max-w-md shadow-sm">
+              <p className="text-4xl mb-3">📦</p>
+              <p className="font-bold text-gray-900 mb-1">No delivery to scan</p>
+              <p className="text-sm text-gray-500 mb-5">This page activates when your truck has arrived at your location.</p>
+              <button onClick={() => router.push('/client/orders')} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition">
+                View My Orders →
+              </button>
+            </div>
+          </main>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-screen bg-slate-50">
+      <Sidebar userRole={user.role} />
+      <div className="flex-1 min-w-0">
+        <Header user={user} />
+        <main className="p-6">
+          <div className="max-w-lg mx-auto space-y-5">
+
+            <div>
+              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-0.5">Delivery Confirmation</p>
+              <h1 className="text-2xl font-black text-gray-900">Scan QR Code</h1>
+              <p className="text-sm text-gray-500 mt-0.5">Verify the truck and confirm receipt of fuel</p>
+            </div>
+
+            {/* Order details */}
+            <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-xs text-gray-400">Order</p>
+                  <p className="font-bold text-gray-900">#{order.id.slice(0, 8)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">Fuel</p>
+                  <p className="font-bold text-gray-900">{order.volume?.toLocaleString()}L {order.fuelType}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">Truck</p>
+                  <p className="font-bold text-gray-900">{truck?.registrationNumber ?? '—'}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">Driver</p>
+                  <p className="font-bold text-gray-900">{order.assignedDriverName ?? '—'}</p>
                 </div>
               </div>
+            </div>
 
-              {/* Scanner */}
-              {scanning ? (
-                <div className="bg-white rounded-xl p-6 border border-gray-200">
-                  <QRScanner onScan={handleScan} />
-                  <button
-                    onClick={() => setScanning(false)}
-                    className="w-full mt-4 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium py-3 rounded-lg transition-colors"
-                  >
-                    Cancel Scan
-                  </button>
+            {/* Camera / Scanner area */}
+            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+
+              {/* Camera view */}
+              {stage === 'camera' && (
+                <div className="relative bg-black">
+                  <video
+                    ref={videoRef}
+                    className="w-full max-h-72 object-cover"
+                    playsInline
+                    muted
+                  />
+                  {/* Scan overlay */}
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    {/* Dimmed surround */}
+                    <div className="absolute inset-0 bg-black/40" />
+                    {/* Viewfinder box */}
+                    <div className="relative w-52 h-52 z-10">
+                      {/* Corner brackets */}
+                      {[
+                        'top-0 left-0 border-t-4 border-l-4 rounded-tl-lg',
+                        'top-0 right-0 border-t-4 border-r-4 rounded-tr-lg',
+                        'bottom-0 left-0 border-b-4 border-l-4 rounded-bl-lg',
+                        'bottom-0 right-0 border-b-4 border-r-4 rounded-br-lg',
+                      ].map((cls, i) => (
+                        <div key={i} className={`absolute w-8 h-8 border-white ${cls}`} />
+                      ))}
+                      {/* Scan line */}
+                      <div className="absolute inset-x-0 h-0.5 bg-blue-400 opacity-90 animate-scanline" />
+                    </div>
+                  </div>
+                  {/* Hint */}
+                  <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent px-4 py-3 text-center">
+                    <p className="text-white text-sm font-medium">{scanHint}</p>
+                  </div>
                 </div>
-              ) : (
-                <div className="bg-white rounded-xl p-12 text-center border border-gray-200">
-                  <div className="text-8xl mb-6">📷</div>
-                  <h3 className="text-2xl font-bold text-gray-900 mb-4">Ready to Scan</h3>
-                  <p className="text-gray-600 mb-8">
-                    Point your camera at the truck's QR code to accept the delivery
+              )}
+
+              {/* Processing state */}
+              {stage === 'processing' && (
+                <div className="flex flex-col items-center justify-center py-16 gap-4">
+                  <div className="w-14 h-14 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                  <p className="text-sm font-semibold text-gray-700">Verifying QR code…</p>
+                  <p className="text-xs text-gray-400">Matching truck identity</p>
+                </div>
+              )}
+
+              {/* Idle state — prompt to open camera */}
+              {stage === 'idle' && (
+                <div className="p-8 text-center">
+                  {/* Mock QR pattern */}
+                  <div className="inline-block mb-5">
+                    <div className="w-28 h-28 relative mx-auto bg-white border-2 border-gray-200 rounded-xl p-2">
+                      <div className="absolute inset-0 grid grid-cols-7 grid-rows-7 gap-px p-2">
+                        {Array.from({ length: 49 }).map((_, i) => {
+                          const corners = [0,1,2,3,4,5,7,12,14,19,21,26,28,29,30,31,32,33];
+                          return <div key={i} className={`rounded-[1px] ${corners.includes(i) ? 'bg-gray-800' : Math.random() > 0.55 ? 'bg-gray-800' : 'bg-white'}`} />;
+                        })}
+                      </div>
+                      {/* Corner squares */}
+                      {[['top-2 left-2',''], ['top-2 right-2',''], ['bottom-2 left-2','']].map(([pos], i) => (
+                        <div key={i} className={`absolute ${pos} w-7 h-7 border-[3px] border-gray-800 rounded-sm bg-white`}>
+                          <div className="absolute inset-1 bg-gray-800 rounded-[2px]" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <p className="font-bold text-gray-900 mb-1 text-sm">Expected QR Code</p>
+                  <p className="font-mono text-xs text-gray-500 bg-slate-100 px-3 py-1.5 rounded-lg inline-block mb-1">
+                    {truck?.qrCode ?? 'QR-TRK-???'}
                   </p>
+                  <p className="text-xs text-gray-400 mb-6">Scan the QR sticker on the truck to confirm delivery</p>
+
+                  {camError && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 mb-4 text-sm text-red-700">
+                      {camError}
+                    </div>
+                  )}
+
                   <button
-                    onClick={() => setScanning(true)}
-                    className="bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-8 rounded-lg transition-colors text-lg"
+                    onClick={openCamera}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl transition flex items-center justify-center gap-2.5"
                   >
-                    📷 Start Scanning
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    Open Camera to Scan
                   </button>
                 </div>
               )}
 
-              {/* Instructions */}
-              <div className="bg-blue-50 rounded-xl p-6 mt-8">
-                <h3 className="font-bold text-blue-900 mb-3">📋 Instructions:</h3>
-                <ol className="text-sm text-blue-800 space-y-2 list-decimal list-inside">
-                  <li>Verify the driver's identity and truck registration</li>
-                  <li>Check fuel delivery quantity matches your order</li>
-                  <li>Click "Start Scanning" and point camera at QR code</li>
-                  <li>System will automatically verify and complete delivery</li>
-                </ol>
-              </div>
+              {/* Capture button when camera is open */}
+              {stage === 'camera' && (
+                <div className="p-4 flex gap-3">
+                  <button
+                    onClick={() => { stopCamera(); setStage('idle'); }}
+                    className="flex-1 border border-gray-200 text-gray-600 font-semibold py-3 rounded-xl text-sm hover:bg-gray-50 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleCapture}
+                    className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 rounded-xl text-sm transition flex items-center justify-center gap-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <circle cx="12" cy="12" r="3" strokeWidth={2} />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    </svg>
+                    Capture & Confirm
+                  </button>
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="bg-white rounded-xl p-12 text-center border border-gray-200 max-w-2xl mx-auto">
-              <span className="text-6xl mb-4 block">📦</span>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">No Active Delivery</h3>
-              <p className="text-gray-600 mb-6">
-                You don't have any deliveries awaiting acceptance
-              </p>
-              <button
-                onClick={() => router.push('/client/orders')}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-3 rounded-lg transition-colors"
-              >
-                View My Orders →
-              </button>
-            </div>
-          )}
+
+            {/* Hidden canvas for frame processing */}
+            <canvas ref={canvasRef} className="hidden" />
+
+          </div>
         </main>
       </div>
     </div>

@@ -6,7 +6,17 @@ module.exports = {
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      keyframes: {
+        scanline: {
+          '0%, 100%': { top: '0%' },
+          '50%':      { top: '100%' },
+        },
+      },
+      animation: {
+        scanline: 'scanline 2s ease-in-out infinite',
+      },
+    },
   },
   plugins: [],
 }
