@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders, getTrucks, updateOrder, updateTruck, addNotification } from '@/src/lib/demo-data';
+import { getCurrentUser, getOrders, getTrucks, updateOrder, updateTruck, addNotification, shortOrderId } from '@/src/lib/demo-data';
+import { qrMatchesTruck } from '@/src/lib/truck-qr';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
 
 type Stage = 'idle' | 'camera' | 'processing' | 'confirmed';
@@ -101,41 +102,23 @@ export default function ScanQRPage() {
 
   // ── QR code detected ─────────────────────────────────────────
   function handleQRFound(qrData: string) {
-    stopCamera();
-    setScanHint(`QR code read: ${qrData}`);
+    const assignedId = order?.assignedTruckId ?? truck?.id ?? '';
 
-    // Check if it matches the assigned truck
-    const matchesTruck = truck?.qrCode && qrData.includes(truck.qrCode);
-
-    if (matchesTruck || true) {
-      // ↑ "|| true" = demo mode: any QR code read = success
+    // The QR encodes the truck's ID — it must match THIS order's assigned truck.
+    if (qrMatchesTruck(qrData, { id: assignedId })) {
+      stopCamera();
+      setScanHint('✓ Truck verified');
       confirmDelivery();
-    } else {
-      setCamError(`QR code does not match assigned truck (${truck?.qrCode}). Please try again.`);
-      setStage('idle');
+      return;
     }
-  }
 
-  // ── Manual capture (demo fallback) ───────────────────────────
-  function handleCapture() {
-    const video  = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
-
+    // A decoded code that is not our truck → real mismatch. Stop and report it
+    // without revealing the assigned truck's identity.
     stopCamera();
-    setStage('processing');
-
-    // Demo: brief processing animation then confirm
-    setTimeout(() => {
-      confirmDelivery();
-    }, 1500);
+    setCamError(
+      `❌ This QR code doesn't match your delivery. Please scan the QR code on the truck for this order.`
+    );
+    setStage('idle');
   }
 
   // ── Confirm delivery ──────────────────────────────────────────
@@ -156,21 +139,21 @@ export default function ScanQRPage() {
         addNotification({
           id: `notif-${Date.now()}-d`, userId: order.assignedDriverId,
           type: 'DELIVERY_COMPLETED', title: '✅ Delivery Accepted',
-          message: `Client accepted delivery for order #${order.id.slice(0, 8)}. Return to depot.`,
+          message: `Client accepted delivery for order #${shortOrderId(order.id)}. Return to depot.`,
           read: false, createdAt: new Date(),
         });
       }
       addNotification({
         id: `notif-${Date.now()}-s`, userId: 'seller-001',
         type: 'DELIVERY_COMPLETED', title: '✅ Order Completed',
-        message: `Order #${order.id.slice(0, 8)} delivered to ${order.destinationName}.`,
+        message: `Order #${shortOrderId(order.id)} delivered to ${order.destinationName}.`,
         read: false, createdAt: new Date(),
       });
       if (order.assignedTSPId) {
         addNotification({
           id: `notif-${Date.now()}-t`, userId: order.assignedTSPId,
           type: 'DELIVERY_COMPLETED', title: '✅ Order Completed',
-          message: `Order #${order.id.slice(0, 8)} successfully delivered.`,
+          message: `Order #${shortOrderId(order.id)} successfully delivered.`,
           read: false, createdAt: new Date(),
         });
       }
@@ -195,7 +178,7 @@ export default function ScanQRPage() {
                 </svg>
               </div>
               <h2 className="text-2xl font-black text-gray-900 mb-2">Delivery Confirmed</h2>
-              <p className="text-gray-500 text-sm mb-1">Order #{order?.id.slice(0, 8)} completed.</p>
+              <p className="text-gray-500 text-sm mb-1">Order #{shortOrderId(order?.id)} completed.</p>
               <p className="text-gray-400 text-xs mb-8">
                 {order?.volume?.toLocaleString()}L {order?.fuelType} received · {truck?.registrationNumber}
               </p>
@@ -253,19 +236,19 @@ export default function ScanQRPage() {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <p className="text-xs text-gray-400">Order</p>
-                  <p className="font-bold text-gray-900">#{order.id.slice(0, 8)}</p>
+                  <p className="font-bold text-gray-900">#{shortOrderId(order.id)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-400">Fuel</p>
                   <p className="font-bold text-gray-900">{order.volume?.toLocaleString()}L {order.fuelType}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-400">Truck</p>
-                  <p className="font-bold text-gray-900">{truck?.registrationNumber ?? '—'}</p>
+                  <p className="text-xs text-gray-400">Destination</p>
+                  <p className="font-bold text-gray-900">{order.destinationName ?? '—'}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-400">Driver</p>
-                  <p className="font-bold text-gray-900">{order.assignedDriverName ?? '—'}</p>
+                  <p className="text-xs text-gray-400">Status</p>
+                  <p className="font-bold text-emerald-600">Arrived — awaiting scan</p>
                 </div>
               </div>
             </div>
@@ -320,29 +303,18 @@ export default function ScanQRPage() {
               {/* Idle state — prompt to open camera */}
               {stage === 'idle' && (
                 <div className="p-8 text-center">
-                  {/* Mock QR pattern */}
-                  <div className="inline-block mb-5">
-                    <div className="w-28 h-28 relative mx-auto bg-white border-2 border-gray-200 rounded-xl p-2">
-                      <div className="absolute inset-0 grid grid-cols-7 grid-rows-7 gap-px p-2">
-                        {Array.from({ length: 49 }).map((_, i) => {
-                          const corners = [0,1,2,3,4,5,7,12,14,19,21,26,28,29,30,31,32,33];
-                          return <div key={i} className={`rounded-[1px] ${corners.includes(i) ? 'bg-gray-800' : Math.random() > 0.55 ? 'bg-gray-800' : 'bg-white'}`} />;
-                        })}
-                      </div>
-                      {/* Corner squares */}
-                      {[['top-2 left-2',''], ['top-2 right-2',''], ['bottom-2 left-2','']].map(([pos], i) => (
-                        <div key={i} className={`absolute ${pos} w-7 h-7 border-[3px] border-gray-800 rounded-sm bg-white`}>
-                          <div className="absolute inset-1 bg-gray-800 rounded-[2px]" />
-                        </div>
-                      ))}
-                    </div>
+                  {/* Scan icon */}
+                  <div className="w-20 h-20 mx-auto mb-5 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center">
+                    <svg className="w-10 h-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6.75 6.75h.75v.75h-.75v-.75zM6.75 16.5h.75v.75h-.75v-.75zM16.5 6.75h.75v.75h-.75v-.75zM13.5 13.5h.75v.75h-.75v-.75zM13.5 19.5h.75v.75h-.75v-.75zM19.5 13.5h.75v.75h-.75v-.75zM19.5 19.5h.75v.75h-.75v-.75zM16.5 16.5h.75v.75h-.75v-.75z" />
+                    </svg>
                   </div>
 
-                  <p className="font-bold text-gray-900 mb-1 text-sm">Expected QR Code</p>
-                  <p className="font-mono text-xs text-gray-500 bg-slate-100 px-3 py-1.5 rounded-lg inline-block mb-1">
-                    {truck?.qrCode ?? 'QR-TRK-???'}
+                  <p className="font-bold text-gray-900 mb-1 text-sm">Verify your delivery</p>
+                  <p className="text-xs text-gray-400 mb-6 max-w-xs mx-auto">
+                    Point your camera at the QR code on the arriving truck. We&apos;ll automatically check it matches your order before confirming receipt.
                   </p>
-                  <p className="text-xs text-gray-400 mb-6">Scan the QR sticker on the truck to confirm delivery</p>
 
                   {camError && (
                     <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 mb-4 text-sm text-red-700">
@@ -363,24 +335,14 @@ export default function ScanQRPage() {
                 </div>
               )}
 
-              {/* Capture button when camera is open */}
+              {/* Cancel button while the camera scans continuously */}
               {stage === 'camera' && (
-                <div className="p-4 flex gap-3">
+                <div className="p-4">
                   <button
                     onClick={() => { stopCamera(); setStage('idle'); }}
-                    className="flex-1 border border-gray-200 text-gray-600 font-semibold py-3 rounded-xl text-sm hover:bg-gray-50 transition"
+                    className="w-full border border-gray-200 text-gray-600 font-semibold py-3 rounded-xl text-sm hover:bg-gray-50 transition"
                   >
                     Cancel
-                  </button>
-                  <button
-                    onClick={handleCapture}
-                    className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 rounded-xl text-sm transition flex items-center justify-center gap-2"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <circle cx="12" cy="12" r="3" strokeWidth={2} />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                    </svg>
-                    Capture & Confirm
                   </button>
                 </div>
               )}

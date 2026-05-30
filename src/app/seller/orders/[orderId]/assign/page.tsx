@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header from '@/src/components/layout/Header';
 import StatusBadge from '@/src/components/workflow/StatusBadge';
-import { getCurrentUser, setCurrentUser, getUsers, getOrders, updateOrder, addNotification } from '@/src/lib/demo-data';
+import { getCurrentUser, setCurrentUser, getUsers, getOrders, updateOrder, addNotification, shortOrderId } from '@/src/lib/demo-data';
 import { DRIVER_POOL } from '@/src/lib/driver-pool';
 
 export default function AssignTransporterPage() {
@@ -77,6 +77,7 @@ export default function AssignTransporterPage() {
   assignedTSPId:       selectedTransporter,        // ← was transporterId
   assignedDriverName:  `${transporter.firstName} ${transporter.lastName}`, // ← was transporterName
   workspaceId:         transporter.workspaceId,
+  assignedToTspAt:     new Date(),
 });
 
     // Notify transporter
@@ -85,7 +86,7 @@ export default function AssignTransporterPage() {
       userId: selectedTransporter,
       type: 'ORDER_ASSIGNED',
       title: '📦 New Order Assigned',
-      message: `You have been assigned order #${orderId.slice(0, 8)}. Please assign driver and truck.`,
+      message: `You have been assigned order #${shortOrderId(orderId)}. Please assign driver and truck.`,
       read: false,
       createdAt: new Date(),
     });
@@ -97,7 +98,7 @@ export default function AssignTransporterPage() {
         userId: order.clientId,
         type: 'ORDER_PROGRESS',
         title: '🚛 Transporter Assigned',
-        message: `Your order #${orderId.slice(0, 8)} has been assigned to a transporter`,
+        message: `Your order #${shortOrderId(orderId)} has been assigned to a transporter`,
         read: false,
         createdAt: new Date(),
       });
@@ -134,7 +135,7 @@ export default function AssignTransporterPage() {
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h2 className="text-xl font-bold text-gray-900 mb-2">Order Details</h2>
-                <p className="text-sm text-gray-600">Order #{order.id.slice(0, 8)}</p>
+                <p className="text-sm text-gray-600">Order #{shortOrderId(order.id)}</p>
               </div>
               <StatusBadge status={order.status} />
             </div>

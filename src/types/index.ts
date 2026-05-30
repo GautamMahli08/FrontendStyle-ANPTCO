@@ -231,9 +231,11 @@ export interface Order {
   assignedTruckRegistration?: string;
 
   // timestamps
-  createdAt:      Date;
-  assignedAt?:    Date;
-  tripStartedAt?: Date;
+  createdAt:        Date;
+  assignedAt?:      Date;
+  assignedToTspAt?: Date;
+  truckAssignedAt?: Date;
+  tripStartedAt?:   Date;
   arrivedAt?:     Date;
   completedAt?:   Date;
   cancelledAt?:   Date;

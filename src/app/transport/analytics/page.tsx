@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header from '@/src/components/layout/Header';
-import { getCurrentUser, getTrucks, getOrders } from '@/src/lib/demo-data';
+import { getCurrentUser, getTrucks, getOrders, shortOrderId } from '@/src/lib/demo-data';
 
 // ── Types ─────────────────────────────────────────────────────
 type StatusColor = 'green' | 'blue' | 'orange';
@@ -192,7 +192,7 @@ export default function TransportAnalyticsPage() {
                   return (
                     <div key={order.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                       <div>
-                        <p className="font-medium text-sm">Order #{order.id.slice(0, 8)}</p>
+                        <p className="font-medium text-sm">Order #{shortOrderId(order.id)}</p>
                         <p className="text-xs text-gray-600">
                           {truck?.registrationNumber} • {order.volume?.toLocaleString()}L {order.fuelType}
                         </p>

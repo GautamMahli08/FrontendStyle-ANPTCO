@@ -67,6 +67,10 @@ export const FIXED_DEPOT = {
 };
 
 // FIXED DELIVERY DESTINATIONS
+// Each station stores fuel per type with a seed `base` level and a `capacity`.
+// The live level = base + fuel received from completed deliveries (capped at
+// capacity). This is the single source of truth for BOTH the client dashboard
+// reserves and the order-capacity validation, so they can never disagree.
 export const DELIVERY_ZONES = [
   {
     id: 'qurum-station',
@@ -77,6 +81,11 @@ export const DELIVERY_ZONES = [
     clientName: 'Client 1',
     address: 'Qurum, Muscat, Oman',
     type: 'Petrol Station',
+    fuels: {
+      DIESEL:  { base: 6000, capacity: 20000 },
+      PETROL:  { base: 2500, capacity: 10000 },
+      PREMIUM: { base: 1200, capacity: 5000  },
+    } as Record<string, { base: number; capacity: number }>,
   },
   {
     id: 'khuwair-station',
@@ -87,6 +96,11 @@ export const DELIVERY_ZONES = [
     clientName: 'Client 2',
     address: 'Al Khuwair, Muscat, Oman',
     type: 'Petrol Station',
+    fuels: {
+      DIESEL:  { base: 4200, capacity: 20000 },
+      PETROL:  { base: 1800, capacity: 10000 },
+      PREMIUM: { base: 600,  capacity: 5000  },
+    } as Record<string, { base: number; capacity: number }>,
   },
 ];
 
@@ -251,10 +265,11 @@ const DEMO_TRUCKS: Truck[] = [
     tspName: 'Transporter 1',
     workspaceId: 'ws-anptco',
     compartments: [
-      { id: 1, capacity: 5000, fuelType: 'DIESEL',  currentVolume: 5000 },
-      { id: 2, capacity: 3000, fuelType: 'PETROL',  currentVolume: 3000 },
+      { id: 1, capacity: 5000, fuelType: 'DIESEL', currentVolume: 0 },
+      { id: 2, capacity: 5000, fuelType: 'DIESEL', currentVolume: 0 },
+      { id: 3, capacity: 4000, fuelType: 'PETROL', currentVolume: 0 },
     ],
-    capacity: 8000,
+    capacity: 14000,
     status: 'IDLE',
     currentLat: 23.670250,
     currentLng: 58.189120,
@@ -272,10 +287,11 @@ const DEMO_TRUCKS: Truck[] = [
     tspName: 'Transporter 1',
     workspaceId: 'ws-anptco',
     compartments: [
-      { id: 1, capacity: 6000, fuelType: 'DIESEL',  currentVolume: 6000 },
-      { id: 2, capacity: 4000, fuelType: 'PETROL',  currentVolume: 4000 },
+      { id: 1, capacity: 6000, fuelType: 'DIESEL',  currentVolume: 0 },
+      { id: 2, capacity: 4000, fuelType: 'PETROL',  currentVolume: 0 },
+      { id: 3, capacity: 3000, fuelType: 'PREMIUM', currentVolume: 0 },
     ],
-    capacity: 10000,
+    capacity: 13000,
     status: 'IDLE',
     currentLat: 23.670250,
     currentLng: 58.189120,
@@ -293,9 +309,11 @@ const DEMO_TRUCKS: Truck[] = [
     tspName: 'Transporter 2',
     workspaceId: 'ws-anptco',
     compartments: [
-      { id: 1, capacity: 8000, fuelType: 'DIESEL',  currentVolume: 8000 },
+      { id: 1, capacity: 8000, fuelType: 'DIESEL', currentVolume: 0 },
+      { id: 2, capacity: 6000, fuelType: 'DIESEL', currentVolume: 0 },
+      { id: 3, capacity: 4000, fuelType: 'PETROL', currentVolume: 0 },
     ],
-    capacity: 8000,
+    capacity: 18000,
     status: 'IDLE',
     currentLat: 23.670250,
     currentLng: 58.189120,
@@ -725,6 +743,186 @@ export const updateTruck = (truckId: string, updates: Partial<Truck>) => {
   saveToStorage(STORAGE_KEYS.TRUCKS, trucks.map(t => t.id === truckId ? { ...t, ...updates } : t));
 };
 
+// ── Capacity validation ───────────────────────────────────────
+
+/** Normalised per-fuel-type breakdown of an order, whether single-fuel or MIXED. */
+export function orderFuelBreakdown(order: any): { fuelType: string; volume: number }[] {
+  if (Array.isArray(order?.fuelItems) && order.fuelItems.length > 0) {
+    return order.fuelItems.map((f: any) => ({ fuelType: f.fuelType, volume: f.volume }));
+  }
+  if (order?.fuelType && order.fuelType !== 'MIXED') {
+    return [{ fuelType: order.fuelType, volume: order.volume ?? 0 }];
+  }
+  return [];
+}
+
+/** Total compartment capacity a truck has for each fuel type. */
+export function truckFuelCapacity(truck: any): Record<string, number> {
+  const caps: Record<string, number> = {};
+  (truck?.compartments ?? []).forEach((c: any) => {
+    const ft = c.fuelType;
+    if (!ft) return;
+    caps[ft] = (caps[ft] ?? 0) + (c.capacity ?? 0);
+  });
+  return caps;
+}
+
+/**
+ * Can a single truck carry this order? Checks, per fuel type, that the truck has
+ * enough compartment capacity of that fuel to hold the ordered volume.
+ */
+export function checkTruckFitsOrder(
+  truck: any,
+  order: any,
+): { ok: boolean; shortfalls: { fuelType: string; required: number; available: number }[] } {
+  const caps = truckFuelCapacity(truck);
+  const shortfalls = orderFuelBreakdown(order)
+    .map(({ fuelType, volume }) => ({ fuelType, required: volume, available: caps[fuelType] ?? 0 }))
+    .filter(s => s.required > s.available);
+  return { ok: shortfalls.length === 0, shortfalls };
+}
+
+/**
+ * Live stored level per fuel type for a station: seed `base` plus everything
+ * received from completed deliveries to that station, capped at capacity.
+ * Single source of truth shared by the client dashboard and order validation.
+ */
+export function stationFuelLevels(zoneId: string): Record<string, { current: number; capacity: number }> {
+  const zone: any = DELIVERY_ZONES.find(z => z.id === zoneId);
+  if (!zone?.fuels) return {};
+  const completed = getOrders().filter((o: any) => o.destination === zoneId && o.status === 'COMPLETED');
+  const out: Record<string, { current: number; capacity: number }> = {};
+  Object.entries<any>(zone.fuels).forEach(([fuel, cfg]) => {
+    const received = completed.reduce((sum: number, o: any) => {
+      if (Array.isArray(o.fuelItems) && o.fuelItems.length) {
+        const item = o.fuelItems.find((f: any) => f.fuelType === fuel);
+        return sum + (item?.volume || 0);
+      }
+      return sum + (o.fuelType === fuel ? (o.volume || 0) : 0);
+    }, 0);
+    out[fuel] = { current: Math.min(cfg.base + received, cfg.capacity), capacity: cfg.capacity };
+  });
+  return out;
+}
+
+/** Remaining storage headroom (capacity − current level) per fuel type for a station. */
+export function stationFuelHeadroom(zoneId: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  Object.entries(stationFuelLevels(zoneId)).forEach(([fuel, l]) => {
+    out[fuel] = Math.max(0, l.capacity - l.current);
+  });
+  return out;
+}
+
+/**
+ * Will these fuel items fit in the chosen station? Flags any fuel type whose
+ * ordered volume exceeds the station's remaining headroom (i.e. would overfill).
+ */
+export function checkOrderFitsStation(
+  zoneId: string,
+  fuelItems: { fuelType: string; volume: number }[],
+): { ok: boolean; exceeded: { fuelType: string; requested: number; headroom: number }[] } {
+  const headroom = stationFuelHeadroom(zoneId);
+  const exceeded = fuelItems
+    .map(({ fuelType, volume }) => ({ fuelType, requested: volume, headroom: headroom[fuelType] ?? 0 }))
+    .filter(s => s.requested > s.headroom);
+  return { ok: exceeded.length === 0, exceeded };
+}
+
+// ── Order identity + event timeline ───────────────────────────
+
+/**
+ * Short, human-readable code for an order. Order ids look like `order-1748275832123`;
+ * the unique part is the timestamp TAIL, so we show the last 6 chars (not the first,
+ * which are always "order-1…" and identical for every order).
+ */
+export function shortOrderId(id: string | null | undefined): string {
+  if (!id) return '—';
+  return String(id).replace(/^order-/, '').slice(-6).toUpperCase();
+}
+
+export type OrderEventTone = 'default' | 'success' | 'active' | 'alert';
+export type OrderEvent = {
+  key:    string;
+  icon:   string;
+  label:  string;
+  detail?: string;
+  at?:    Date;
+  tone:   OrderEventTone;
+};
+
+const ORDER_STATUS_SEQUENCE = [
+  'PLACED', 'ACCEPTED_BY_SELLER', 'ASSIGNED_TO_TSP', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED', 'COMPLETED',
+];
+
+/**
+ * Chronological event feed for a single order — derived from the timestamps stored
+ * on the order as it moves through the workflow, merged with any fuel anomalies
+ * detected during its journey. Used by the seller & transporter order views.
+ */
+export function getOrderTimeline(order: any, anomalies?: FuelAnomaly[]): OrderEvent[] {
+  if (!order) return [];
+  const toDate = (v: any) => (v ? new Date(v) : undefined);
+  const reached = ORDER_STATUS_SEQUENCE.indexOf(order.status);
+
+  const milestones: (OrderEvent & { seq: number })[] = [
+    { seq: 0, key: 'placed',   icon: '📦', label: 'Order placed',          detail: order.clientName, at: toDate(order.createdAt),        tone: 'default' },
+    { seq: 1, key: 'accepted', icon: '✅', label: 'Accepted by seller',     at: toDate(order.acceptedAt),                                 tone: 'default' },
+    { seq: 2, key: 'tsp',      icon: '🏢', label: 'Assigned to transporter', at: toDate(order.assignedToTspAt),                            tone: 'default' },
+    { seq: 3, key: 'truck',    icon: '🚛', label: 'Truck assigned',         detail: [order.assignedTruckRegistration, order.assignedDriverName].filter(Boolean).join(' · '), at: toDate(order.truckAssignedAt), tone: 'default' },
+    { seq: 4, key: 'enroute',  icon: '🚦', label: 'Journey started',        detail: 'Left ANPTCO depot', at: toDate(order.tripStartedAt),  tone: 'active' },
+    { seq: 5, key: 'arrived',  icon: '📍', label: 'Arrived at station',     detail: order.destinationName, at: toDate(order.arrivedAt),    tone: 'active' },
+    { seq: 6, key: 'done',     icon: '🔒', label: 'Delivery completed',     detail: 'QR verified', at: toDate(order.completedAt),          tone: 'success' },
+  ];
+
+  const events: OrderEvent[] = [];
+
+  if (order.status === 'CANCELLED') {
+    events.push(milestones[0]);
+    events.push({ key: 'cancelled', icon: '❌', label: 'Order cancelled', tone: 'alert', at: toDate(order.cancelledAt) });
+  } else {
+    milestones.forEach(m => {
+      // Show a milestone once the order has reached that stage (or if it carries a timestamp).
+      if ((reached >= 0 && m.seq <= reached) || m.at) {
+        const { seq, ...evt } = m;
+        // Completed steps read as done (green); the current stage is active (blue).
+        if (reached >= 0) {
+          evt.tone =
+            seq < reached   ? 'success' :
+            seq === reached ? (order.status === 'COMPLETED' ? 'success' : 'active') :
+                              evt.tone;
+        }
+        events.push(evt);
+      }
+    });
+  }
+
+  // Merge fuel anomalies detected for this order.
+  (anomalies ?? getFuelAnomalies())
+    .filter(a => a.orderId === order.id)
+    .forEach(a => events.push({
+      key:   `anomaly-${a.id}`,
+      icon:  '🚨',
+      label: `Fuel anomaly — ${a.fuelDropLiters}L drop`,
+      detail: [a.compartment, a.location, a.severity].filter(Boolean).join(' · '),
+      at:    toDate(a.detectedAt),
+      tone:  'alert',
+    }));
+
+  // Sort by timestamp when available; events without a time keep their insertion order.
+  return events
+    .map((e, i) => ({ e, i }))
+    .sort((x, y) => {
+      const tx = x.e.at?.getTime();
+      const ty = y.e.at?.getTime();
+      if (tx != null && ty != null) return tx - ty || x.i - y.i;
+      if (tx != null) return -1;
+      if (ty != null) return 1;
+      return x.i - y.i;
+    })
+    .map(({ e }) => e);
+}
+
 // ── Live journey tracking ─────────────────────────────────────
 // How long a depot → destination journey takes in the demo.
 export const JOURNEY_DURATION_MS = 30_000;
@@ -753,6 +951,19 @@ export function advanceJourneys(): boolean {
     if (o.status === 'EN_ROUTE' && journeyProgress(o) >= 1) {
       updateOrder(o.id, { status: 'ARRIVED', arrivedAt: new Date() });
       if (o.assignedTruckId) updateTruck(o.assignedTruckId, { status: 'ARRIVED' });
+      // The truck reached the station on its own — prompt the client to scan the QR.
+      // This flip happens exactly once per order, so the notification isn't duplicated.
+      if (o.clientId) {
+        addNotification({
+          id:        `notif-arrived-${o.id}`,
+          userId:    o.clientId,
+          type:      'TRUCK_ARRIVED',
+          title:     '📍 Truck Has Arrived!',
+          message:   `Your fuel truck (${o.assignedTruckRegistration ?? ''}) has arrived at ${o.destinationName ?? 'your location'}. Please scan the QR code to accept delivery.`,
+          read:      false,
+          createdAt: new Date(),
+        } as any);
+      }
       changed = true;
     }
   });
@@ -774,6 +985,7 @@ export function assignTransporterAndDispatch(orderId: string, tspId: string): { 
 
   if (truck) {
     const driver: any = getDrivers().find((d: any) => d.tspId === tspId);
+    const now = new Date();
     updateOrder(orderId, {
       status:                    'EN_ROUTE',
       assignedTSPId:             tspId,
@@ -781,13 +993,15 @@ export function assignTransporterAndDispatch(orderId: string, tspId: string): { 
       assignedTruckRegistration: truck.registrationNumber,
       assignedDriverId:          driver?.id ?? '',
       assignedDriverName:        driver ? `${driver.firstName} ${driver.lastName}` : 'Driver',
-      tripStartedAt:             new Date(),
+      assignedToTspAt:           now,
+      truckAssignedAt:           now,
+      tripStartedAt:             now,
     });
     updateTruck(truck.id, { status: 'EN_ROUTE' });
     return { dispatched: true };
   }
 
-  updateOrder(orderId, { status: 'ASSIGNED_TO_TSP', assignedTSPId: tspId });
+  updateOrder(orderId, { status: 'ASSIGNED_TO_TSP', assignedTSPId: tspId, assignedToTspAt: new Date() });
   return { dispatched: false };
 }
 

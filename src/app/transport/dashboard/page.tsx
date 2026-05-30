@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getTrucks, getOrders } from '@/src/lib/demo-data';
+import { getCurrentUser, getTrucks, getOrders, shortOrderId } from '@/src/lib/demo-data';
 
 const STATUS_COLOR: Record<string, string> = {
   ASSIGNED_TO_TSP: 'bg-yellow-100 text-yellow-700',
@@ -89,6 +89,28 @@ export default function TransportDashboard() {
             </div>
           </div>
 
+          {/* Action banner — orders waiting for a truck (mirrors the client's Scan-QR card) */}
+          {needsTruck.length > 0 && (
+            <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-5 flex items-center gap-4 shadow-sm">
+              <div className="w-11 h-11 bg-amber-500 rounded-xl flex items-center justify-center text-xl flex-shrink-0 text-white">🚛</div>
+              <div className="flex-1 min-w-0">
+                <p className="font-black text-amber-800">
+                  {needsTruck.length} order{needsTruck.length > 1 ? 's' : ''} waiting for a truck
+                </p>
+                <p className="text-amber-700 text-sm mt-0.5 truncate">
+                  #{shortOrderId(needsTruck[0].id)} · {fuelSummary(needsTruck[0])} → {needsTruck[0].destinationName}
+                  {needsTruck.length > 1 ? ` · +${needsTruck.length - 1} more` : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => router.push('/transport/orders')}
+                className="bg-amber-600 hover:bg-amber-700 text-white font-black px-5 py-2.5 rounded-xl text-sm transition flex-shrink-0"
+              >
+                Review &amp; Assign →
+              </button>
+            </div>
+          )}
+
           {/* KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <Kpi label="Need Truck"        value={needsTruck.length}  color="amber"  badge={needsTruck.length > 0}  onClick={() => router.push('/transport/orders')} />
@@ -119,7 +141,7 @@ export default function TransportDashboard() {
                     <div key={order.id} className={`flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50 transition ${order.status === 'ASSIGNED_TO_TSP' ? 'bg-yellow-50/40' : ''}`}>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <p className="font-semibold text-gray-900 text-sm">#{order.id.slice(0, 8)}</p>
+                          <p className="font-semibold text-gray-900 text-sm">#{shortOrderId(order.id)}</p>
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
                             {order.status.replace(/_/g, ' ')}
                           </span>
@@ -289,7 +311,7 @@ export default function TransportDashboard() {
               <div className="grid sm:grid-cols-3 lg:grid-cols-4 gap-3 p-4">
                 {done.map(o => (
                   <div key={o.id} className="border border-emerald-200 bg-emerald-50 rounded-xl p-3">
-                    <p className="font-bold text-emerald-800 text-sm">#{o.id.slice(0, 8)}</p>
+                    <p className="font-bold text-emerald-800 text-sm">#{shortOrderId(o.id)}</p>
                     <p className="text-xs text-emerald-600 mt-0.5">{fuelSummary(o)}</p>
                     <p className="text-[11px] text-emerald-500 mt-0.5">{o.destinationName}</p>
                   </div>

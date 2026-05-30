@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders } from '@/src/lib/demo-data';
+import { getCurrentUser, getOrders, shortOrderId } from '@/src/lib/demo-data';
 
 const STEPS = [
   { key: 'PLACED',             label: 'Placed'         },
@@ -118,7 +118,7 @@ export default function ClientOrdersPage() {
                 {done.map(order => (
                   <div key={order.id} className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
                     <div className="flex items-center justify-between mb-2">
-                      <p className="font-bold text-gray-900 text-sm">Order #{order.id.slice(0, 8)}</p>
+                      <p className="font-bold text-gray-900 text-sm">Order #{shortOrderId(order.id)}</p>
                       <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
                         {order.status?.replace(/_/g, ' ')}
                       </span>
@@ -152,7 +152,7 @@ function ActiveOrderCard({ order, onScanQR }: { order: any; onScanQR: () => void
       <div className="flex items-start justify-between mb-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <p className="font-black text-gray-900">Order #{order.id.slice(0, 8)}</p>
+            <p className="font-black text-gray-900">Order #{shortOrderId(order.id)}</p>
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
               {order.status?.replace(/_/g, ' ')}
             </span>

@@ -2,14 +2,23 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
 import {
   getCurrentUser, getOrders, getTrucks, getDrivers,
   updateOrder, updateTruck, updateDriver, addNotification,
-  addFuelAnomaly,
+  addFuelAnomaly, checkTruckFitsOrder, truckFuelCapacity, orderFuelBreakdown, shortOrderId,
+  advanceJourneys, destinationCoords, FIXED_DEPOT, JOURNEY_DURATION_MS,
 } from '@/src/lib/demo-data';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
+import OrderTimeline from '@/src/components/orders/OrderTimeline';
+
+// Leaflet touches `window`, so load the live map only on the client.
+const LiveTrackingMap = dynamic(() => import('@/src/components/maps/LiveTrackingMap'), {
+  ssr: false,
+  loading: () => <div className="w-full h-[380px] flex items-center justify-center text-sm text-gray-400">Loading map…</div>,
+});
 
 // Status helpers
 const STATUS_LABEL: Record<string, string> = {
@@ -39,6 +48,7 @@ export default function TransportOrdersPage() {
   const [assigning,      setAssigning]      = useState<any>(null);   // order being assigned
   const [selectedTruck,  setSelectedTruck]  = useState('');
   const [journeyLoading, setJourneyLoading] = useState<string | null>(null);
+  const [timelineId,     setTimelineId]     = useState<string | null>(null);
 
   const loadData = useCallback((u: any) => {
     const allOrders  = getOrders();
@@ -59,6 +69,9 @@ export default function TransportOrdersPage() {
     if (!u || u.role !== 'TRANSPORT_ADMIN') { router.push('/'); return; }
     setUser(u);
     loadData(u);
+    // Keep the live map moving and flip trucks to ARRIVED once they reach the station.
+    const iv = setInterval(() => { advanceJourneys(); loadData(u); }, 3000);
+    return () => clearInterval(iv);
   }, [router, loadData]);
 
   if (!mounted || !user) return null;
@@ -68,6 +81,21 @@ export default function TransportOrdersPage() {
     if (!selectedTruck || !assigning) return;
     const truck  = trucks.find((t: any) => t.id === selectedTruck);
     if (!truck) return;
+
+    // Capacity guard — the truck must have enough compartment capacity for each
+    // ordered fuel type, otherwise it can't carry this order on its own.
+    const fit = checkTruckFitsOrder(truck, assigning);
+    if (!fit.ok) {
+      const lines = fit.shortfalls
+        .map(s => `• ${s.fuelType}: needs ${s.required.toLocaleString()}L, truck holds ${s.available.toLocaleString()}L`)
+        .join('\n');
+      alert(
+        `🚫 ${truck.registrationNumber} can't carry this order:\n\n${lines}\n\n` +
+        `Assign a truck with more ${fit.shortfalls.map(s => s.fuelType).join('/')} compartment capacity.`
+      );
+      return;
+    }
+
     const driver = drivers.find((d: any) => d.id === truck.assignedDriverId);
 
     updateOrder(assigning.id, {
@@ -77,6 +105,7 @@ export default function TransportOrdersPage() {
       assignedDriverId:        driver?.id   ?? '',
       assignedDriverName:      driver ? `${driver.firstName} ${driver.lastName}` : 'Driver TBD',
       assignedDriverPhone:     driver?.phone ?? '',
+      truckAssignedAt:         new Date(),
     });
     updateTruck(truck.id, { status: 'ASSIGNED' });
     logDemoEvent(user.id, 'TRUCK_ASSIGNED', `orderId=${assigning.id} | truck=${truck.registrationNumber} | driver=${driver?.firstName ?? 'TBD'} | clientId=${assigning.clientId}`);
@@ -125,7 +154,7 @@ export default function TransportOrdersPage() {
         addNotification({
           id: `notif-theft-${Date.now()}`, userId: 'seller-001',
           type: 'FUEL_ANOMALY', title: '🚨 Fuel Anomaly Detected',
-          message: `Unexpected fuel drop of 320L on truck ${order.assignedTruckRegistration} (C1 Petrol) during Order #${order.id.slice(0, 8)}. Location: Al Khuwair.`,
+          message: `Unexpected fuel drop of 320L on truck ${order.assignedTruckRegistration} (C1 Petrol) during Order #${shortOrderId(order.id)}. Location: Al Khuwair.`,
           read: false, createdAt: new Date(),
         });
       }, 3000);
@@ -134,20 +163,8 @@ export default function TransportOrdersPage() {
     setTimeout(() => { setJourneyLoading(null); loadData(user); }, 500);
   };
 
-  // ── Mark truck arrived ────────────────────────────────────
-  const handleMarkArrived = (order: any) => {
-    updateOrder(order.id, { status: 'ARRIVED', arrivedAt: new Date() });
-    updateTruck(order.assignedTruckId, { status: 'ARRIVED' });
-    logDemoEvent(user.id, 'TRUCK_ARRIVED', `orderId=${order.id} | clientId=${order.clientId} | truck=${order.assignedTruckRegistration}`);
-
-    addNotification({
-      id: `notif-${Date.now()}`, userId: order.clientId ?? '',
-      type: 'TRUCK_ARRIVED', title: '📍 Truck Has Arrived!',
-      message: `Your fuel truck (${order.assignedTruckRegistration}) has arrived at ${order.destinationName ?? 'your location'}. Please scan the QR code to accept delivery.`,
-      read: false, createdAt: new Date(),
-    });
-    loadData(user);
-  };
+  // Trucks now reach the station on their own (advanceJourneys flips EN_ROUTE → ARRIVED
+  // once the journey timer elapses), so there is no manual "Mark as Arrived" step.
 
   // ── Pipeline buckets ──────────────────────────────────────
   const needsTruck  = orders.filter((o: any) => o.status === 'ASSIGNED_TO_TSP');
@@ -155,6 +172,22 @@ export default function TransportOrdersPage() {
   const completed   = orders.filter((o: any) => ['COMPLETED', 'CANCELLED'].includes(o.status));
 
   const idleTrucks  = trucks.filter((t: any) => ['IDLE', 'ACTIVE'].includes(t.status));
+
+  // Live journeys for the map — same shape the seller's Fleet Monitor uses.
+  const activeJourneys = orders
+    .filter((o: any) => ['EN_ROUTE', 'ARRIVED'].includes(o.status) && o.assignedTruckId)
+    .map((o: any) => {
+      const dest = destinationCoords(o);
+      return {
+        id:         o.id,
+        truckReg:   o.assignedTruckRegistration || 'Truck',
+        status:     o.status,
+        depot:      { lat: FIXED_DEPOT.lat, lng: FIXED_DEPOT.lng, name: FIXED_DEPOT.name },
+        dest:       { lat: dest.lat, lng: dest.lng, name: o.destinationName || 'Destination' },
+        startedAt:  o.tripStartedAt ? new Date(o.tripStartedAt).getTime() : Date.now(),
+        durationMs: JOURNEY_DURATION_MS,
+      };
+    });
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -175,6 +208,23 @@ export default function TransportOrdersPage() {
               Refresh
             </button>
           </div>
+
+          {/* ── LIVE JOURNEY MAP ── */}
+          {activeJourneys.length > 0 && (
+            <section className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div>
+                  <h2 className="font-bold text-gray-900">Live Delivery Tracking</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">Your trucks en route from the ANPTCO depot to client stations</p>
+                </div>
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
+                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                  {activeJourneys.length} active
+                </span>
+              </div>
+              <LiveTrackingMap journeys={activeJourneys} className="w-full h-[380px]" />
+            </section>
+          )}
 
           {/* ── NEEDS TRUCK ASSIGNMENT ── */}
           {needsTruck.length > 0 && (
@@ -205,7 +255,7 @@ export default function TransportOrdersPage() {
                     <div className="flex items-start justify-between gap-4 mb-4">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
-                          <p className="font-bold text-gray-900">Order #{order.id.slice(0, 8)}</p>
+                          <p className="font-bold text-gray-900">Order #{shortOrderId(order.id)}</p>
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
                             {STATUS_LABEL[order.status] ?? order.status}
                           </span>
@@ -245,19 +295,30 @@ export default function TransportOrdersPage() {
                         </button>
                       )}
                       {order.status === 'EN_ROUTE' && (
-                        <button
-                          onClick={() => handleMarkArrived(order)}
-                          className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-2.5 rounded-xl transition text-sm"
-                        >
-                          📍 Mark as Arrived
-                        </button>
+                        <div className="flex-1 bg-blue-50 border border-blue-200 rounded-xl py-2.5 text-center text-sm font-semibold text-blue-700 flex items-center justify-center gap-2">
+                          <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
+                          En route — tracking live on the map above
+                        </div>
                       )}
                       {order.status === 'ARRIVED' && (
                         <div className="flex-1 bg-teal-50 border border-teal-200 rounded-xl py-2.5 text-center text-sm font-semibold text-teal-700">
                           ✅ Truck at destination — awaiting client QR scan
                         </div>
                       )}
+                      <button
+                        onClick={() => setTimelineId(timelineId === order.id ? null : order.id)}
+                        className="text-sm font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-4 rounded-xl transition"
+                      >
+                        🕒 {timelineId === order.id ? 'Hide' : 'Timeline'}
+                      </button>
                     </div>
+
+                    {/* Event timeline */}
+                    {timelineId === order.id && (
+                      <div className="mt-4 pt-4 border-t border-gray-100">
+                        <OrderTimeline order={order} />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -272,7 +333,7 @@ export default function TransportOrdersPage() {
                 {completed.map((order: any) => (
                   <div key={order.id} className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
                     <div className="flex items-center justify-between mb-2">
-                      <p className="font-bold text-gray-900 text-sm">#{order.id.slice(0, 8)}</p>
+                      <p className="font-bold text-gray-900 text-sm">#{shortOrderId(order.id)}</p>
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
                         {STATUS_LABEL[order.status] ?? order.status}
                       </span>
@@ -307,9 +368,16 @@ export default function TransportOrdersPage() {
 
             {/* Order summary */}
             <div className="bg-slate-50 rounded-xl p-4 mb-5 border border-slate-200">
-              <p className="text-xs text-gray-500 mb-1">Order #{assigning.id.slice(0, 8)}</p>
+              <p className="text-xs text-gray-500 mb-1">Order #{shortOrderId(assigning.id)}</p>
               <p className="font-bold text-gray-900">{assigning.volume?.toLocaleString()}L {assigning.fuelType}</p>
-              <p className="text-sm text-gray-600 mt-0.5">→ {assigning.destinationName}</p>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {orderFuelBreakdown(assigning).map(f => (
+                  <span key={f.fuelType} className="text-[11px] font-semibold bg-white border border-slate-200 text-slate-700 px-2 py-0.5 rounded-full">
+                    Needs {f.volume.toLocaleString()}L {f.fuelType}
+                  </span>
+                ))}
+              </div>
+              <p className="text-sm text-gray-600 mt-2">→ {assigning.destinationName}</p>
               <p className="text-xs text-gray-400 mt-1">{assigning.clientName}</p>
             </div>
 
@@ -326,22 +394,43 @@ export default function TransportOrdersPage() {
                 {idleTrucks.map((truck: any) => {
                   const driver = drivers.find((d: any) => d.id === truck.assignedDriverId);
                   const isSelected = selectedTruck === truck.id;
+                  const caps = truckFuelCapacity(truck);
+                  const fit = checkTruckFitsOrder(truck, assigning);
                   return (
                     <button
                       key={truck.id}
-                      onClick={() => setSelectedTruck(truck.id)}
-                      className={`w-full text-left p-4 rounded-xl border-2 transition-all ${isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}
+                      onClick={() => fit.ok && setSelectedTruck(truck.id)}
+                      disabled={!fit.ok}
+                      className={`w-full text-left p-4 rounded-xl border-2 transition-all ${
+                        !fit.ok
+                          ? 'border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed'
+                          : isSelected
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                      }`}
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="flex items-center gap-2">
                             <p className="font-bold text-gray-900">{truck.registrationNumber}</p>
                             <span className="text-xs text-emerald-600 font-medium bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">IDLE</span>
+                            {!fit.ok && (
+                              <span className="text-xs text-red-600 font-semibold bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
+                                Insufficient {fit.shortfalls.map(s => s.fuelType).join(', ')}
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-gray-500 mt-0.5">
                             {truck.compartments?.length} compartments · {truck.capacity?.toLocaleString()}L capacity
                           </p>
-                          {driver && <p className="text-xs text-blue-600 mt-0.5">👤 {driver.firstName} {driver.lastName}</p>}
+                          <div className="flex flex-wrap gap-1.5 mt-1">
+                            {Object.entries(caps).map(([ft, cap]) => (
+                              <span key={ft} className="text-[10px] font-medium bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
+                                {ft} {(cap as number).toLocaleString()}L
+                              </span>
+                            ))}
+                          </div>
+                          {driver && <p className="text-xs text-blue-600 mt-1">👤 {driver.firstName} {driver.lastName}</p>}
                         </div>
                         {isSelected && <span className="text-blue-600 font-bold text-lg">✓</span>}
                       </div>
@@ -387,7 +476,7 @@ function OrderCard({ order, children }: { order: any; children: React.ReactNode 
     <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
       <div className="flex items-start justify-between mb-3">
         <div>
-          <p className="font-bold text-gray-900">Order #{order.id.slice(0, 8)}</p>
+          <p className="font-bold text-gray-900">Order #{shortOrderId(order.id)}</p>
           <p className="text-xs text-gray-400 mt-0.5">{order.clientName}</p>
         </div>
         <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>

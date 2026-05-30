@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header from '@/src/components/layout/Header';
-import { getCurrentUser, getUsers, getOrders, setCurrentUser } from '@/src/lib/demo-data';
+import { getCurrentUser, getUsers, getOrders, setCurrentUser, shortOrderId } from '@/src/lib/demo-data';
 import { downloadCSV } from '@/src/lib/export-csv';
 
 // ── Types ─────────────────────────────────────────────────────
@@ -629,7 +629,7 @@ export default function SellerReportsPage() {
                         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
                         .map(order => (
                           <tr key={order.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-4 py-3 font-mono text-xs text-gray-400">#{order.id.slice(0, 8)}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-gray-400">#{shortOrderId(order.id)}</td>
                             <td className="px-4 py-3 font-medium text-gray-800">{order.clientName}</td>
                             <td className="px-4 py-3">
                               <span

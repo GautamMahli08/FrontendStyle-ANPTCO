@@ -13,6 +13,7 @@ import {
   getDrivers,
   getTrucks,
   setCurrentUser,
+  shortOrderId,
 } from '@/src/lib/demo-data';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -564,7 +565,7 @@ export default function TransportReportsPage() {
                       const dur = tripDurationHours(order);
                       return (
                         <tr key={order.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="px-4 py-3">#{order.id.slice(0, 8)}</td>
+                          <td className="px-4 py-3">#{shortOrderId(order.id)}</td>
                           <td className="px-4 py-3">{order.clientName}</td>
                           <td className="px-4 py-3">{order.fuelType}</td>
                           <td className="px-4 py-3">{order.volume} L</td>

@@ -2,14 +2,22 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
 import {
   getCurrentUser, getUsers, getOrders, getTrucks,
-  getSellerConnections, updateOrder, addNotification,
-  assignTransporterAndDispatch,
+  getSellerConnections, updateOrder, addNotification, shortOrderId,
+  advanceJourneys, destinationCoords, FIXED_DEPOT, JOURNEY_DURATION_MS,
 } from '@/src/lib/demo-data';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
+import OrderTimeline from '@/src/components/orders/OrderTimeline';
+
+// Leaflet touches `window`, so load the live map only on the client.
+const LiveTrackingMap = dynamic(() => import('@/src/components/maps/LiveTrackingMap'), {
+  ssr: false,
+  loading: () => <div className="w-full h-[380px] flex items-center justify-center text-sm text-gray-400">Loading map…</div>,
+});
 
 const STATUS_COLOR: Record<string, string> = {
   PLACED:             'bg-yellow-100 text-yellow-700',
@@ -38,6 +46,8 @@ export default function SellerOrdersPage() {
   // which order has the inline TSP picker open
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const [selectedTsp, setSelectedTsp] = useState<string>('');
+  // which order has its event timeline expanded
+  const [timelineId,  setTimelineId]  = useState<string | null>(null);
   // per-order loading state: orderId → true
   const [accepting,   setAccepting]   = useState<Record<string, boolean>>({});
 
@@ -71,7 +81,8 @@ export default function SellerOrdersPage() {
     if (!u || u.role !== 'SELLER_MANAGER') { router.push('/'); return; }
     setUser(u);
     load(u);
-    const iv = setInterval(() => load(u), 3000);
+    // Auto-advance journeys so the map animates and trucks arrive on their own.
+    const iv = setInterval(() => { advanceJourneys(); load(u); }, 3000);
     return () => clearInterval(iv);
   }, [router, load]);
 
@@ -81,14 +92,14 @@ export default function SellerOrdersPage() {
   function handleAccept(orderId: string) {
     setAccepting(prev => ({ ...prev, [orderId]: true }));
     setTimeout(() => {
-      updateOrder(orderId, { status: 'ACCEPTED_BY_SELLER', workspaceId: user.workspaceId });
+      updateOrder(orderId, { status: 'ACCEPTED_BY_SELLER', workspaceId: user.workspaceId, acceptedAt: new Date() });
       logDemoEvent('seller-001', 'ORDER_ACCEPTED', `orderId=${orderId}`);
       const order = orders.find(o => o.id === orderId);
       if (order?.clientId) {
         addNotification({
           id: `notif-${Date.now()}`, userId: order.clientId,
           type: 'ORDER_ACCEPTED', title: '✅ Order Accepted',
-          message: `Your order #${orderId.slice(0, 8)} has been accepted.`,
+          message: `Your order #${shortOrderId(orderId)} has been accepted.`,
           read: false, createdAt: new Date(),
         });
       }
@@ -99,13 +110,13 @@ export default function SellerOrdersPage() {
 
   // ── Decline ───────────────────────────────────────────────────
   function handleDecline(orderId: string) {
-    updateOrder(orderId, { status: 'CANCELLED' });
+    updateOrder(orderId, { status: 'CANCELLED', cancelledAt: new Date() });
     const order = orders.find(o => o.id === orderId);
     if (order?.clientId) {
       addNotification({
         id: `notif-${Date.now()}`, userId: order.clientId,
         type: 'ORDER_REJECTED', title: 'Order Declined',
-        message: `Your order #${orderId.slice(0, 8)} was declined.`,
+        message: `Your order #${shortOrderId(orderId)} was declined.`,
         read: false, createdAt: new Date(),
       });
     }
@@ -113,31 +124,33 @@ export default function SellerOrdersPage() {
   }
 
   // ── Assign to TSP ─────────────────────────────────────────────
+  // The seller only hands the order to the transporter. Choosing the actual
+  // truck (and validating its compartment capacity) is the transporter's job,
+  // done on the Transport → Orders page.
   function handleAssign(order: any) {
     if (!selectedTsp) return;
     const tsp = tsps.find(t => t.id === selectedTsp);
     if (!tsp) return;
 
-    // Assigning the transporter dispatches a truck — it leaves the depot immediately.
-    const { dispatched } = assignTransporterAndDispatch(order.id, tsp.id);
     const tspName = tsp.companyName ?? tsp.firstName;
-    logDemoEvent('seller-001', dispatched ? 'JOURNEY_STARTED' : 'ASSIGNED_TO_TSP', `orderId=${order.id} | tsp=${tspName}`);
+    updateOrder(order.id, {
+      status:          'ASSIGNED_TO_TSP',
+      assignedTSPId:   tsp.id,
+      assignedToTspAt: new Date(),
+    });
+    logDemoEvent('seller-001', 'ASSIGNED_TO_TSP', `orderId=${order.id} | tsp=${tspName}`);
 
     addNotification({
       id: `notif-${Date.now()}`, userId: tsp.id,
       type: 'ORDER_ASSIGNED_TO_TSP', title: '📦 New Order Assigned',
-      message: dispatched
-        ? `Order #${order.id.slice(0, 8)} — ${fuelSummary(order)} → ${order.destinationName}. Truck dispatched.`
-        : `Order #${order.id.slice(0, 8)} — ${fuelSummary(order)} → ${order.destinationName}. Assign a truck.`,
+      message: `Order #${shortOrderId(order.id)} — ${fuelSummary(order)} → ${order.destinationName}. Assign a truck to dispatch.`,
       read: false, createdAt: new Date(),
     });
     if (order.clientId) {
       addNotification({
         id: `notif-${Date.now()}-c`, userId: order.clientId,
-        type: 'ORDER_PROGRESS', title: dispatched ? '🚛 Truck En Route' : '🚛 Transport Assigned',
-        message: dispatched
-          ? `${tspName} dispatched a truck to ${order.destinationName}. Track it live.`
-          : `Your order has been assigned to ${tspName}.`,
+        type: 'ORDER_PROGRESS', title: '🚛 Transporter Assigned',
+        message: `Your order has been assigned to ${tspName}. They will dispatch a truck shortly.`,
         read: false, createdAt: new Date(),
       });
     }
@@ -153,6 +166,22 @@ export default function SellerOrdersPage() {
   const withTsp   = orders.filter(o => o.status === 'ASSIGNED_TO_TSP');
   const active    = orders.filter(o => ['ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(o.status));
   const done      = orders.filter(o => o.status === 'COMPLETED');
+
+  // Live journeys for the map — populated once the TSP dispatches a truck.
+  const activeJourneys = orders
+    .filter(o => ['EN_ROUTE', 'ARRIVED'].includes(o.status) && o.assignedTruckId)
+    .map(o => {
+      const dest = destinationCoords(o);
+      return {
+        id:         o.id,
+        truckReg:   o.assignedTruckRegistration || 'Truck',
+        status:     o.status,
+        depot:      { lat: FIXED_DEPOT.lat, lng: FIXED_DEPOT.lng, name: FIXED_DEPOT.name },
+        dest:       { lat: dest.lat, lng: dest.lng, name: o.destinationName || 'Destination' },
+        startedAt:  o.tripStartedAt ? new Date(o.tripStartedAt).getTime() : Date.now(),
+        durationMs: JOURNEY_DURATION_MS,
+      };
+    });
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -193,6 +222,23 @@ export default function SellerOrdersPage() {
             ))}
           </div>
 
+          {/* ── LIVE JOURNEY MAP ── */}
+          {activeJourneys.length > 0 && (
+            <section className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div>
+                  <h2 className="font-bold text-gray-900">Live Delivery Tracking</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">Trucks dispatched by transporters, en route to client stations</p>
+                </div>
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
+                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                  {activeJourneys.length} active
+                </span>
+              </div>
+              <LiveTrackingMap journeys={activeJourneys} className="w-full h-[380px]" />
+            </section>
+          )}
+
           {/* Orders list */}
           {orders.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-2xl p-16 text-center">
@@ -223,7 +269,7 @@ export default function SellerOrdersPage() {
                       }`}>
                         {/* Order */}
                         <div>
-                          <p className="font-bold text-gray-900 text-sm">#{order.id.slice(0, 8)}</p>
+                          <p className="font-bold text-gray-900 text-sm">#{shortOrderId(order.id)}</p>
                           <p className="text-xs text-gray-400 mt-0.5">{order.clientName}</p>
                           <p className="text-[10px] text-gray-300 mt-0.5">
                             {new Date(order.createdAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })}
@@ -248,6 +294,17 @@ export default function SellerOrdersPage() {
 
                         {/* Action */}
                         <div className="flex items-center gap-2 justify-end min-w-[140px]">
+                          <button
+                            onClick={() => setTimelineId(timelineId === order.id ? null : order.id)}
+                            title="View event timeline"
+                            className={`text-xs font-bold px-2.5 py-1.5 rounded-lg border transition ${
+                              timelineId === order.id
+                                ? 'text-slate-700 bg-slate-200 border-slate-300'
+                                : 'text-slate-500 bg-slate-50 hover:bg-slate-100 border-slate-200'
+                            }`}
+                          >
+                            🕒
+                          </button>
                           {order.status === 'PLACED' && (
                             <>
                               <button
@@ -297,6 +354,13 @@ export default function SellerOrdersPage() {
                           )}
                         </div>
                       </div>
+
+                      {/* Inline event timeline */}
+                      {timelineId === order.id && (
+                        <div className="border-t border-gray-100 bg-slate-50 px-5 py-4">
+                          <OrderTimeline order={order} />
+                        </div>
+                      )}
 
                       {/* Inline TSP picker */}
                       {isAssigning && (

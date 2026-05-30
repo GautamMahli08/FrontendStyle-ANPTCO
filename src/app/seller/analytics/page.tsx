@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders, getTrucks } from '@/src/lib/demo-data';
+import { getCurrentUser, getOrders, getTrucks, shortOrderId } from '@/src/lib/demo-data';
 
 // ── Types ─────────────────────────────────────────────────────
 type BarColor = 'green' | 'blue' | 'yellow' | 'red' | 'purple';
@@ -136,7 +136,7 @@ export default function SellerAnalyticsPage() {
               {orders.slice(0, 10).map(order => (
                 <div key={order.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                   <div>
-                    <p className="font-medium text-sm">Order #{order.id.slice(0, 8)}</p>
+                    <p className="font-medium text-sm">Order #{shortOrderId(order.id)}</p>
                     <p className="text-xs text-gray-600">
                       {order.volume}L {order.fuelType} → {order.destinationName}
                     </p>

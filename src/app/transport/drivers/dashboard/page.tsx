@@ -12,6 +12,7 @@ import {
   getOrders,
   getDrivers,
   getTrucks,
+  shortOrderId,
 } from '@/src/lib/demo-data';
 
 
@@ -290,7 +291,7 @@ className="bg-orange-100 p-3 rounded"
 </div>
                 <div>
                   <h2 className="text-2xl font-bold text-gray-900 mb-2">🚨 Active Delivery</h2>
-                  <p className="text-gray-600">Order #{activeDelivery.id.slice(0, 8)}</p>
+                  <p className="text-gray-600">Order #{shortOrderId(activeDelivery.id)}</p>
                 </div>
                 <StatusBadge status={activeDelivery.status} />
               </div>
@@ -344,7 +345,7 @@ className="bg-orange-100 p-3 rounded"
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <h3 className="font-semibold text-gray-900 mb-1">
-                          Order #{delivery.id.slice(0, 8)}
+                          Order #{shortOrderId(delivery.id)}
                         </h3>
                         <p className="text-sm text-gray-600">
                           {delivery.volume}L {delivery.fuelType} → {delivery.destinationName}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { setCurrentUser, getUsers, getDrivers, PLATFORM_ADMIN, DEMO_PERSONAS } from '@/src/lib/demo-data';
+import { setCurrentUser, getUsers, getDrivers, PLATFORM_ADMIN, DEMO_PERSONAS, clearAllData } from '@/src/lib/demo-data';
 import { useState } from 'react';
 
 const colorDot: Record<string, string> = {
@@ -40,6 +40,16 @@ export default function DemoBanner({ currentUserId }: { currentUserId?: string }
       setCurrentUser(user);
       router.push(persona.route);
     }
+  };
+
+  const resetDemo = () => {
+    if (!confirm(
+      'Reset all demo data?\n\nThis clears every order, truck assignment, alert and tank back to the original demo state and returns to the home screen.'
+    )) return;
+    setOpen(false);
+    clearAllData();
+    // Hard reload so all in-memory React state is rebuilt from the fresh seed.
+    window.location.href = '/';
   };
 
   const current = DEMO_PERSONAS.find(p => p.id === currentUserId);
@@ -93,7 +103,13 @@ export default function DemoBanner({ currentUserId }: { currentUserId?: string }
                 );
               })}
             </div>
-            <div className="p-3 border-t border-gray-100 bg-gray-50">
+            <div className="p-3 border-t border-gray-100 bg-gray-50 space-y-2">
+              <button
+                onClick={resetDemo}
+                className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg py-2 transition-colors"
+              >
+                🔄 Reset Demo Data
+              </button>
               <button
                 onClick={() => { setOpen(false); router.push('/'); }}
                 className="w-full text-center text-xs text-gray-500 hover:text-gray-700 transition-colors"

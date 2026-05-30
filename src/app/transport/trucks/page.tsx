@@ -18,6 +18,8 @@ getTrucks,
 
 } from '@/src/lib/demo-data';
 
+import { downloadTruckQrPdf, truckQrDataUrl } from '@/src/lib/truck-qr';
+
 export default function TransportTrucksPage() {
 
 const router = useRouter();
@@ -38,6 +40,10 @@ useState<any>(null);
 const [showModal,
 setShowModal] =
 useState(false);
+
+const [qrPreview, setQrPreview] = useState<string | null>(null);
+
+const [qrBusy, setQrBusy] = useState(false);
 
 useEffect(()=>{
 
@@ -82,6 +88,19 @@ loadTrucks(user);
 return ()=>clearInterval(interval);
 
 },[user]);
+
+// Generate a live QR preview (encoding the truck ID) whenever the detail modal opens.
+useEffect(()=>{
+
+setQrPreview(null);
+
+if(showModal && selectedTruck){
+
+truckQrDataUrl(selectedTruck).then(setQrPreview).catch(()=>setQrPreview(null));
+
+}
+
+},[showModal, selectedTruck]);
 
 const loadTrucks = (
 currentUser:any
@@ -569,6 +588,13 @@ Truck ready for deliveries
 
 </p>
 
+<button
+onClick={async (e)=>{ e.stopPropagation(); await downloadTruckQrPdf(truck); }}
+className="mt-2 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-1.5 rounded-lg text-xs transition-colors"
+>
+⬇️ Download QR (PDF)
+</button>
+
 </div>
 
 :
@@ -944,19 +970,27 @@ mb-2
 
 </p>
 
+{qrPreview ? (
 <img
-src={selectedTruck.qrCode}
-alt="QR"
-className="
-w-48
-h-48
-mx-auto
-mt-3
-border-2
-border-green-300
-rounded-lg
-"
+src={qrPreview}
+alt="Truck QR"
+className="w-48 h-48 mx-auto mt-3 border-2 border-green-300 rounded-lg bg-white"
 />
+) : (
+<div className="w-48 h-48 mx-auto mt-3 flex items-center justify-center text-xs text-gray-400 border-2 border-dashed border-green-200 rounded-lg">
+Generating QR…
+</div>
+)}
+
+<p className="text-center text-xs text-gray-500 mt-2 font-mono">Encodes truck ID: {selectedTruck.id}</p>
+
+<button
+onClick={async ()=>{ setQrBusy(true); try { await downloadTruckQrPdf(selectedTruck); } finally { setQrBusy(false); } }}
+disabled={qrBusy}
+className="mt-3 w-full bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg text-sm transition-colors"
+>
+{qrBusy ? 'Preparing PDF…' : '⬇️ Download QR (PDF)'}
+</button>
 
 </div>
 

@@ -7,8 +7,9 @@ import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
 import {
   getCurrentUser, getTrucks, getOrders, getFuelAnomalies, updateFuelAnomaly,
-  advanceJourneys, destinationCoords, FIXED_DEPOT, JOURNEY_DURATION_MS,
+  advanceJourneys, destinationCoords, FIXED_DEPOT, JOURNEY_DURATION_MS, shortOrderId,
 } from '@/src/lib/demo-data';
+import OrderTimeline from '@/src/components/orders/OrderTimeline';
 
 // Leaflet touches `window`, so load the map only on the client.
 const LiveTrackingMap = dynamic(() => import('@/src/components/maps/LiveTrackingMap'), {
@@ -201,10 +202,10 @@ export default function FleetMonitorPage() {
           )}
 
           {/* ── FLEET TABLE + DETAIL PANEL ── */}
-          <div className="grid lg:grid-cols-3 gap-6">
+          <div className="grid lg:grid-cols-2 gap-6">
 
             {/* Truck list */}
-            <div className="lg:col-span-2 bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
               <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
                 <h2 className="font-bold text-gray-900">Live Fleet</h2>
                 <span className="text-xs text-gray-400">{trucks.length} trucks</span>
@@ -260,11 +261,11 @@ export default function FleetMonitorPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="p-5 space-y-4">
+                  <div className="p-4 space-y-3">
 
                     {/* Status */}
                     <div>
-                      <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">Status</p>
+                      <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-1.5">Status</p>
                       <span className={`text-sm font-bold px-3 py-1 rounded-full ${TRUCK_STATUS_COLOR[selectedTruck.status] ?? 'bg-gray-100 text-gray-500'}`}>
                         {selectedTruck.status?.replace(/_/g, ' ')}
                       </span>
@@ -272,11 +273,11 @@ export default function FleetMonitorPage() {
 
                     {/* Compartments */}
                     <div>
-                      <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">Compartments</p>
-                      <div className="space-y-2">
+                      <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-1.5">Compartments</p>
+                      <div className="space-y-1.5">
                         {selectedTruck.compartments?.map((c: any) => (
-                          <div key={c.id} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                            <div className="flex justify-between text-xs mb-1">
+                          <div key={c.id} className="bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+                            <div className="flex justify-between text-xs">
                               <span className="font-medium text-gray-700">C{c.id} · {c.fuelType}</span>
                               <span className="font-bold text-gray-900">{c.capacity?.toLocaleString()}L cap.</span>
                             </div>
@@ -299,13 +300,19 @@ export default function FleetMonitorPage() {
                     {/* Active order */}
                     {selectedOrder && (
                       <div>
-                        <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">Current Order</p>
-                        <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
-                          <p className="text-sm font-bold text-blue-900">#{selectedOrder.id.slice(0, 8)}</p>
-                          <p className="text-xs text-blue-700 mt-0.5">{selectedOrder.volume?.toLocaleString()}L {selectedOrder.fuelType}</p>
-                          <p className="text-xs text-blue-600 mt-0.5">→ {selectedOrder.destinationName}</p>
+                        <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-1.5">Current Order</p>
+                        <div className="bg-blue-50 rounded-xl px-3 py-2.5 border border-blue-200">
+                          <p className="text-sm font-bold text-blue-900">#{shortOrderId(selectedOrder.id)}</p>
+                          <p className="text-xs text-blue-700 mt-0.5">{selectedOrder.volume?.toLocaleString()}L {selectedOrder.fuelType} → {selectedOrder.destinationName}</p>
                           <p className="text-xs text-blue-500 mt-0.5">Client: {selectedOrder.clientName}</p>
                         </div>
+                      </div>
+                    )}
+
+                    {/* Event timeline */}
+                    {selectedOrder && (
+                      <div className="border-t border-gray-100 pt-3">
+                        <OrderTimeline order={selectedOrder} />
                       </div>
                     )}
 

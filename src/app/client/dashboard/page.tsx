@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders } from '@/src/lib/demo-data';
+import { getCurrentUser, getOrders, shortOrderId, stationFuelLevels } from '@/src/lib/demo-data';
 
 // ── Demo event logger ────────────────────────────────────────
 export function logDemoEvent(actor: string, action: string, detail: string) {
@@ -70,19 +70,11 @@ const FUEL_META: Record<string, { label: string; barColor: string; textColor: st
   PREMIUM: { label: 'Premium', barColor: 'bg-purple-500', textColor: 'text-purple-700', bgColor: 'bg-purple-50', iconBg: 'bg-purple-100', iconColor: 'text-purple-600' },
 };
 
-const STATION_BASES = [
-  {
-    id: 'qurum-station',
-    name: 'Station A',
-    sub: 'Qurum, Muscat',
-    fuels: { DIESEL: { base: 6000, capacity: 20000 }, PETROL: { base: 2500, capacity: 10000 }, PREMIUM: { base: 1200, capacity: 5000 } },
-  },
-  {
-    id: 'khuwair-station',
-    name: 'Station B',
-    sub: 'Al Khuwair, Muscat',
-    fuels: { DIESEL: { base: 4200, capacity: 20000 }, PETROL: { base: 1800, capacity: 10000 }, PREMIUM: { base: 600, capacity: 5000 } },
-  },
+// Display metadata only — fuel base/capacity/levels come from the shared
+// stationFuelLevels() helper so the dashboard and order validation always agree.
+const STATION_META = [
+  { id: 'qurum-station',   name: 'Station A', sub: 'Qurum, Muscat'     },
+  { id: 'khuwair-station', name: 'Station B', sub: 'Al Khuwair, Muscat' },
 ];
 const FUEL_KEYS = ['DIESEL', 'PETROL', 'PREMIUM'] as const;
 
@@ -112,24 +104,13 @@ export default function ClientDashboard() {
   const completed = orders.filter(o => o.status === 'COMPLETED');
   const arrived   = active.find(o => o.status === 'ARRIVED');
 
-  // Compute per-station reserves from completed orders
-  const stationData = STATION_BASES.map(station => {
+  // Per-station reserves from the shared source of truth (seed + completed deliveries).
+  const stationData = STATION_META.map(station => {
+    const levels = stationFuelLevels(station.id);
     const fuelLevels = Object.fromEntries(
       FUEL_KEYS.map(fuel => {
-        const { base, capacity } = station.fuels[fuel];
-        const received = completed
-          .filter(o => o.destination === station.id)
-          .reduce((sum: number, o: any) => {
-            // Multi-fuel order: sum only the matching fuel item
-            if (o.fuelItems?.length > 0) {
-              const item = o.fuelItems.find((f: any) => f.fuelType === fuel);
-              return sum + (item?.volume || 0);
-            }
-            // Single-fuel order
-            return sum + (o.fuelType === fuel ? (o.volume || 0) : 0);
-          }, 0);
-        const current = Math.min(base + received, capacity);
-        return [fuel, { current, capacity, pct: Math.round((current / capacity) * 100) }];
+        const l = levels[fuel] ?? { current: 0, capacity: 1 };
+        return [fuel, { current: l.current, capacity: l.capacity, pct: Math.round((l.current / l.capacity) * 100) }];
       })
     );
     return { ...station, fuelLevels };
@@ -361,7 +342,7 @@ export default function ClientDashboard() {
                     >
                       <div className="flex items-start justify-between mb-2">
                         <div>
-                          <p className="font-black text-gray-900 text-sm">Order #{order.id.slice(0, 8)}</p>
+                          <p className="font-black text-gray-900 text-sm">Order #{shortOrderId(order.id)}</p>
                           <p className="text-xs text-gray-500 mt-0.5">
                             {order.volume?.toLocaleString()}L {order.fuelType} · {order.destinationName}
                           </p>
@@ -408,7 +389,7 @@ export default function ClientDashboard() {
                         <div key={order.id} className="flex items-center justify-between text-sm">
                           <div className="flex items-center gap-2 text-gray-600">
                             <span className="text-emerald-500">✓</span>
-                            <span className="font-medium">#{order.id.slice(0, 8)}</span>
+                            <span className="font-medium">#{shortOrderId(order.id)}</span>
                             <span className="text-gray-400">·</span>
                             <span className="text-gray-500">{order.volume?.toLocaleString()}L {order.fuelType}</span>
                           </div>

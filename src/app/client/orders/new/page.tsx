@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, addOrder, addNotification, DELIVERY_ZONES } from '@/src/lib/demo-data';
+import { getCurrentUser, addOrder, addNotification, DELIVERY_ZONES, checkOrderFitsStation } from '@/src/lib/demo-data';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
 
 const FUEL_TYPES = [
@@ -86,12 +86,16 @@ export default function NewOrderPage() {
     const s = selected[k];
     return (s.useCustom ? parseInt(s.custom) || 0 : s.volume) >= 100;
   });
-  const canSubmit = canProceed && locationId;
   const location  = DELIVERY_ZONES.find(z => z.id === locationId);
 
   function getFinalVolume(s: FuelSelection) {
     return s.useCustom ? (parseInt(s.custom) || 0) : s.volume;
   }
+
+  // Station capacity check — block ordering more than the station can still hold.
+  const orderFuelItems = selectedKeys.map(k => ({ fuelType: k, volume: getFinalVolume(selected[k]) }));
+  const stationCheck   = locationId ? checkOrderFitsStation(locationId, orderFuelItems) : { ok: true, exceeded: [] };
+  const canSubmit      = canProceed && !!locationId && stationCheck.ok;
 
   function toggleFuel(key: string) {
     setSelected(prev => {
@@ -370,6 +374,23 @@ export default function NewOrderPage() {
                       </button>
                     ))}
                   </div>
+
+                  {/* Station capacity warning */}
+                  {locationId && !stationCheck.ok && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-5">
+                      <p className="text-sm font-bold text-red-700 mb-2">🚫 {location?.name} can't hold this order</p>
+                      <div className="space-y-1">
+                        {stationCheck.exceeded.map(e => (
+                          <p key={e.fuelType} className="text-xs text-red-600">
+                            <span className="font-semibold">{e.fuelType}</span>: ordering {e.requested.toLocaleString()}L but only{' '}
+                            {e.headroom.toLocaleString()}L of free capacity remains
+                            {e.headroom === 0 ? ' (tank full)' : ''}.
+                          </p>
+                        ))}
+                      </div>
+                      <p className="text-[11px] text-red-500 mt-2">Reduce the volume or choose another station to continue.</p>
+                    </div>
+                  )}
 
                   <div className="mb-5">
                     <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide block mb-2">Notes (optional)</label>

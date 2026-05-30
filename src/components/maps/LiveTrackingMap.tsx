@@ -219,5 +219,7 @@ export default function LiveTrackingMap({
     return () => clearInterval(iv);
   }, []);
 
-  return <div ref={elRef} className={className} />;
+  // `relative z-0` traps Leaflet's internal pane/control z-indexes (up to ~1000) inside
+  // this container's own stacking context, so they don't paint over the header dropdown.
+  return <div ref={elRef} className={`relative z-0 ${className}`} />;
 }

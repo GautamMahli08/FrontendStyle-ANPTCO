@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders, getKYCDocuments, getFuelAnomalies } from '@/src/lib/demo-data';
+import { getCurrentUser, getOrders, getKYCDocuments, getFuelAnomalies, shortOrderId } from '@/src/lib/demo-data';
 
 const STATUS_COLOR: Record<string, string> = {
   PLACED:             'bg-yellow-100 text-yellow-700',
@@ -140,7 +140,7 @@ export default function SellerDashboard() {
                   <div key={order.id} className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 transition">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="font-semibold text-gray-900 text-sm">#{order.id.slice(0, 8)}</p>
+                        <p className="font-semibold text-gray-900 text-sm">#{shortOrderId(order.id)}</p>
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
                           {order.status?.replace(/_/g, ' ')}
                         </span>

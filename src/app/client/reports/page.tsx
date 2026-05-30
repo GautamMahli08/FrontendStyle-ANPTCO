@@ -13,6 +13,7 @@ import {
   getDrivers,
   getTrucks,
   setCurrentUser,
+  shortOrderId,
 } from '@/src/lib/demo-data';
 
 // ── Types ─────────────────────────────────────────────────────
@@ -774,7 +775,7 @@ useEffect(() => {
                         const ws = workspaceRows.find(w => w.id === order.workspaceId);
                         return (
                           <tr key={order.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-4 py-3 font-mono text-xs text-gray-400">#{order.id.slice(0, 8)}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-gray-400">#{shortOrderId(order.id)}</td>
                             <td className="px-4 py-3 font-medium text-gray-800">{order.clientName}</td>
                             <td className="px-4 py-3">
                               <span

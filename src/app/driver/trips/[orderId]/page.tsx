@@ -18,6 +18,7 @@ import {
   updateDriver,
   updateTankLevel,
   addNotification,
+  shortOrderId,
 } from '@/src/lib/demo-data';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -177,9 +178,9 @@ useState(false);
       notifyParties(
         'TRIP_STARTED',
         '🚛 Trip Started',
-        `Driver ${user.firstName} ${user.lastName} started delivery for order #${order.id.slice(0, 8)}`,
+        `Driver ${user.firstName} ${user.lastName} started delivery for order #${shortOrderId(order.id)}`,
         `Your fuel delivery is on the way to ${dest}! Driver: ${user.firstName} ${user.lastName}`,
-        `Driver ${user.firstName} ${user.lastName} started delivery for order #${order.id.slice(0, 8)}`
+        `Driver ${user.firstName} ${user.lastName} started delivery for order #${shortOrderId(order.id)}`
       );
 
       loadTripData(user);
@@ -204,9 +205,9 @@ useState(false);
       notifyParties(
         'DRIVER_ARRIVED',
         '📍 Driver Arrived',
-        `Driver arrived at ${dest} for order #${order.id.slice(0, 8)}`,
+        `Driver arrived at ${dest} for order #${shortOrderId(order.id)}`,
         `The driver has arrived at ${dest}. Please prepare for fuel delivery.`,
-        `Driver arrived at destination for order #${order.id.slice(0, 8)}`
+        `Driver arrived at destination for order #${shortOrderId(order.id)}`
       );
 
       loadTripData(user);
@@ -326,9 +327,9 @@ handleCompleteDelivery();
       notifyParties(
         'DELIVERY_COMPLETED',
         '✅ Delivery Completed',
-        `Order #${order.id.slice(0, 8)} delivered successfully!`,
+        `Order #${shortOrderId(order.id)} delivered successfully!`,
         `Your fuel delivery of ${order.volume?.toLocaleString()}L ${order.fuelType} has been completed! 🎉`,
-        `Order #${order.id.slice(0, 8)} delivered by ${user.firstName} ${user.lastName}`
+        `Order #${shortOrderId(order.id)} delivered by ${user.firstName} ${user.lastName}`
       );
 
       alert('✅ Delivery completed! Great job! 🎉');
@@ -393,7 +394,7 @@ handleCompleteDelivery();
             </button>
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Trip Details 🚛</h1>
-              <p className="text-gray-500">Order #{order.id.slice(0, 8)}</p>
+              <p className="text-gray-500">Order #{shortOrderId(order.id)}</p>
             </div>
           </div>
 
