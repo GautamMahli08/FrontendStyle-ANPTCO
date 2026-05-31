@@ -14,11 +14,10 @@
 
 type Pt = { x: number; y: number };
 
-// Origin (Fuel Depot) sits in the lower-centre, toward the "Enter the Platform" section.
-const HUB: Pt = { x: 600, y: 550 };
-// Horizontal centre of the screen — routes bow away from it to keep the
-// central content column (cards / hero / login) clear.
-const CENTER_X = 700;
+// Origin (Fuel Depot) sits in the lower third, centred, so it appears just below the
+// login personas (never behind them) while staying clear of the wide-screen crop.
+// Routes run out sideways, then up the margins to the cities.
+const HUB: Pt = { x: 600, y: 525 };
 
 // Destinations live in the left/right margins + corners — never the centre.
 // Labelled with Omani cities (positions are decorative, not geographic).
@@ -31,13 +30,10 @@ const NODES: Array<Pt & { color: string; dur: number; begin: number; name: strin
   { x: 905,  y: 500, color: '#8b5cf6', dur: 7.5, begin: 1.6, name: 'Ibri'    },
 ];
 
-/** Quadratic curve from a → b, bowed outward (away from screen centre) so routes
- *  hug the margins and avoid the central content. */
+/** Orthogonal "elbow" route from a → b: a straight horizontal run out of the depot,
+ *  then a straight vertical run into the destination — no curves. */
 function routePath(a: Pt, b: Pt): string {
-  const cy = (a.y + b.y) / 2;
-  // push the control point horizontally past the node, away from centre
-  const cx = b.x + (b.x - CENTER_X) * 0.3;
-  return `M ${a.x} ${a.y} Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${b.x} ${b.y}`;
+  return `M ${a.x} ${a.y} L ${b.x} ${a.y} L ${b.x} ${b.y}`;
 }
 
 export default function NetworkMap({ className = '' }: { className?: string }) {

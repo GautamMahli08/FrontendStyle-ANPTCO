@@ -185,7 +185,7 @@ export default function Home() {
               <p className="text-slate-400 text-xs mt-0.5">Select a role to explore its dashboard — no login required</p>
             </div>
 
-            <div className="space-y-2 max-w-3xl mx-auto">
+            <div className="space-y-2 max-w-3xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-3">
               {PERSONA_ROWS.map((row, ri) => (
                 <div key={ri} className={`grid gap-2 ${row.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
                   {row
@@ -199,7 +199,7 @@ export default function Home() {
                         key={persona.id}
                         onClick={() => quickLogin(persona.id)}
                         disabled={isLoading}
-                        className={`group flex items-center gap-3 bg-white/90 border ${theme.card} rounded-xl px-4 py-2.5 text-left transition-all duration-150 shadow-sm hover:shadow-md disabled:opacity-50 backdrop-blur-sm`}
+                        className={`group flex items-center gap-3 bg-white border ${theme.card} rounded-xl px-4 py-2.5 text-left transition-all duration-150 shadow-sm hover:shadow-md disabled:opacity-50`}
                       >
                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-base flex-shrink-0 ${theme.iconBg}`}>
                           {persona.icon}
