@@ -227,7 +227,7 @@ export default function Home() {
 
         {/* Footer — pinned to the bottom, mirrors the header */}
         <footer className="flex-shrink-0 border-t border-slate-200/70 bg-white/80 backdrop-blur-sm">
-          <div className="flex items-center justify-between max-w-3xl mx-auto px-6 py-3">
+          <div className="max-w-5xl mx-auto px-6 flex items-center justify-between py-3">
             <p className="text-[11px] text-slate-300">© {new Date().getFullYear()} FuelFleet · ANPTCO</p>
             <span className="flex items-center gap-1 text-[11px] text-emerald-500 font-medium">
               <span className="w-1 h-1 bg-emerald-500 rounded-full animate-pulse" />
