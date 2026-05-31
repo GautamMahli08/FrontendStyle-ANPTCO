@@ -99,7 +99,7 @@ export default function Home() {
   };
 
   return (
-    <div className="h-screen overflow-hidden bg-white flex flex-col">
+    <div className="min-h-screen bg-white flex flex-col">
 
       {/* ── NETWORK GRID BACKGROUND ── */}
       <div className="fixed inset-0 pointer-events-none z-0" aria-hidden>
@@ -110,7 +110,7 @@ export default function Home() {
       </div>
 
       {/* ── CONTENT ── */}
-      <div className="relative z-10 h-full flex flex-col">
+      <div className="relative z-10 flex-1 flex flex-col">
 
         {/* Header */}
         <header className="flex-shrink-0 border-b border-slate-200/70 bg-white/80 backdrop-blur-sm">
@@ -221,18 +221,20 @@ export default function Home() {
                 </div>
               ))}
             </div>
-
-            {/* Compact footer strip */}
-            <div className="flex items-center justify-between mt-3 max-w-3xl mx-auto">
-              <p className="text-[11px] text-slate-300">© {new Date().getFullYear()} FuelFleet · ANPTCO</p>
-              <span className="flex items-center gap-1 text-[11px] text-emerald-500 font-medium">
-                <span className="w-1 h-1 bg-emerald-500 rounded-full animate-pulse" />
-                All systems operational
-              </span>
-            </div>
           </section>
 
         </main>
+
+        {/* Footer — pinned to the bottom, mirrors the header */}
+        <footer className="flex-shrink-0 border-t border-slate-200/70 bg-white/80 backdrop-blur-sm">
+          <div className="flex items-center justify-between max-w-3xl mx-auto px-6 py-3">
+            <p className="text-[11px] text-slate-300">© {new Date().getFullYear()} FuelFleet · ANPTCO</p>
+            <span className="flex items-center gap-1 text-[11px] text-emerald-500 font-medium">
+              <span className="w-1 h-1 bg-emerald-500 rounded-full animate-pulse" />
+              All systems operational
+            </span>
+          </div>
+        </footer>
       </div>
     </div>
   );

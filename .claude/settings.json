@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(npm run *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "PowerShell(\"===working===\")",
+      "PowerShell(git show HEAD:src/app/page.tsx | Out-File -FilePath \"$env:TEMP\\\\committed_page.tsx\" -Encoding utf8; $c = Get-Content \"$env:TEMP\\\\committed_page.tsx\"; \"Committed return null at line:\"; \\($c | Select-String -Pattern \"return null\"\\).LineNumber; \"Committed non-empty count:\"; \\($c | Where-Object { $_.Trim\\(\\) -ne \"\" }\\).Count)",
+      "PowerShell($c = git show HEAD:src/app/page.tsx; \"Committed non-empty lines:\"; \\($c | Where-Object { $_.Trim\\(\\) -ne \"\" }\\).Count; \"return null present:\"; \\($c | Select-String \"return null\"\\).Count; \"footer text present:\"; \\($c | Select-String \"systems operational\"\\).Count)"
     ]
   }
 }
