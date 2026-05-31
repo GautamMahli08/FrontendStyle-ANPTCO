@@ -22,12 +22,12 @@ const HUB: Pt = { x: 600, y: 525 };
 // Destinations live in the left/right margins + corners — never the centre.
 // Labelled with Omani cities (positions are decorative, not geographic).
 const NODES: Array<Pt & { color: string; dur: number; begin: number; name: string }> = [
-  { x: 270,  y: 120, color: '#172554', dur: 7.0, begin: 0.0, name: 'Sohar'   },
-  { x: 95,   y: 310, color: '#0c4a6e', dur: 6.5, begin: 2.6, name: 'Buraimi' },
-  { x: 300,  y: 500, color: '#7c2d12', dur: 8.5, begin: 2.0, name: 'Nizwa'   },
-  { x: 935,  y: 120, color: '#164e63', dur: 8.0, begin: 1.2, name: 'Khasab'  },
-  { x: 1120, y: 310, color: '#14532d', dur: 7.2, begin: 0.3, name: 'Sur'     },
-  { x: 905,  y: 500, color: '#4c1d95', dur: 7.5, begin: 1.6, name: 'Ibri'    },
+  { x: 270,  y: 120, color: '#1d4ed8', dur: 7.0, begin: 0.0, name: 'Sohar'   },
+  { x: 95,   y: 310, color: '#0369a1', dur: 6.5, begin: 2.6, name: 'Buraimi' },
+  { x: 300,  y: 500, color: '#c2410c', dur: 8.5, begin: 2.0, name: 'Nizwa'   },
+  { x: 935,  y: 120, color: '#0e7490', dur: 8.0, begin: 1.2, name: 'Khasab'  },
+  { x: 1120, y: 310, color: '#15803d', dur: 7.2, begin: 0.3, name: 'Sur'     },
+  { x: 905,  y: 500, color: '#6d28d9', dur: 7.5, begin: 1.6, name: 'Ibri'    },
 ];
 
 /** Orthogonal "elbow" route from a → b: a straight horizontal run out of the depot,

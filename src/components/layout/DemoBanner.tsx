@@ -12,6 +12,11 @@ const colorDot: Record<string, string> = {
   teal:   'bg-teal-400',
 };
 
+// Personas offered in the switcher — kept in sync with the login screen
+// (hides Platform Admin, the second client, and the Driver).
+const SWITCHABLE_IDS = ['client-001', 'seller-001', 'tsp-001', 'tsp-002'];
+const SWITCHABLE_PERSONAS = DEMO_PERSONAS.filter(p => SWITCHABLE_IDS.includes(p.id));
+
 export default function DemoBanner({ currentUserId }: { currentUserId?: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -77,7 +82,7 @@ export default function DemoBanner({ currentUserId }: { currentUserId?: string }
               <p className="text-xs text-amber-600 mt-0.5">Click to instantly switch role</p>
             </div>
             <div className="py-1 max-h-80 overflow-y-auto">
-              {DEMO_PERSONAS.map(persona => {
+              {SWITCHABLE_PERSONAS.map(persona => {
                 const isCurrent = persona.id === currentUserId;
                 return (
                   <button

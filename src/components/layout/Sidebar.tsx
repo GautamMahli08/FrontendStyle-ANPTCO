@@ -3,6 +3,7 @@
 import { useRouter, usePathname } from 'next/navigation';
 import { UserRole } from '@/src/types';
 import { logout } from '@/src/lib/demo-data';
+import OomcoLogo from '@/src/components/OomcoLogo';
 
 const nav: Record<UserRole, Array<{ name: string; path: string; icon: string }>> = {
   PLATFORM_ADMIN: [
@@ -81,9 +82,9 @@ export default function Sidebar({ userRole }: { userRole: UserRole }) {
         onClick={() => router.push('/')}
         className="flex items-center gap-3 px-5 py-5 border-b border-gray-100 hover:bg-gray-50 transition w-full text-left"
       >
-        <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-sm flex-shrink-0">⛽</div>
+        <OomcoLogo className="w-8 h-8 flex-shrink-0" />
         <div>
-          <p className="font-black text-gray-900 text-sm tracking-tight leading-tight">FuelFleet</p>
+          <p className="font-black text-gray-900 text-sm tracking-tight leading-tight">OOMCO</p>
           <p className="text-[10px] text-gray-400 uppercase tracking-widest">ANPTCO</p>
         </div>
       </button>

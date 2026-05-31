@@ -10,6 +10,7 @@ import {
   DEMO_PERSONAS,
 } from '@/src/lib/demo-data';
 import NetworkMap from '@/src/components/maps/NetworkMap';
+import OomcoLogo from '@/src/components/OomcoLogo';
 
 // ── Hero feature pills ────────────────────────────────────────
 const FEATURE_PILLS = [
@@ -119,8 +120,8 @@ export default function Home() {
         <header className="flex-shrink-0 border-b border-slate-200/70 bg-white/80 backdrop-blur-sm">
           <div className="relative max-w-5xl mx-auto px-6 h-13 flex items-center justify-between py-3.5">
             <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-xs shadow-sm">⛽</div>
-              <span className="font-black text-base text-slate-900 tracking-tight">FuelFleet</span>
+              <OomcoLogo className="w-7 h-7 shrink-0" />
+              <span className="font-black text-base text-slate-900 tracking-tight">OOMCO</span>
               <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest border border-slate-200 rounded px-1.5 py-0.5 ml-1">ANPTCO</span>
             </div>
             <span className="hidden md:inline absolute left-1/2 -translate-x-1/2 text-blue-600 text-[11px] font-bold uppercase tracking-widest">Fuel Ordering &amp; Monitoring Platform</span>
@@ -232,7 +233,7 @@ export default function Home() {
         {/* Footer — pinned to the bottom, mirrors the header */}
         <footer className="flex-shrink-0 border-t border-slate-200/70 bg-white/80 backdrop-blur-sm">
           <div className="max-w-5xl mx-auto px-6 flex items-center justify-between py-3">
-            <p className="text-[11px] text-slate-300">© {new Date().getFullYear()} FuelFleet · ANPTCO</p>
+            <p className="text-[11px] text-slate-300">© {new Date().getFullYear()} OOMCO · ANPTCO</p>
             <span className="flex items-center gap-1 text-[11px] text-emerald-500 font-medium">
               <span className="w-1 h-1 bg-emerald-500 rounded-full animate-pulse" />
               All systems operational

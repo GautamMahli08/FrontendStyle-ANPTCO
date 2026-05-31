@@ -45,7 +45,7 @@ export async function downloadTruckQrPdf(truck: TruckLike): Promise<void> {
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
-  doc.text('FuelFleet', cx, 13, { align: 'center' });
+  doc.text('OOMCO', cx, 13, { align: 'center' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
   doc.text('ANPTCO · Vehicle Identification QR', cx, 21, { align: 'center' });

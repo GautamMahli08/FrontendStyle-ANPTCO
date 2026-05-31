@@ -448,7 +448,7 @@ const DEMO_NOTIFICATIONS: Notification[] = [
     id: 'notif-welcome-seller',
     userId: 'seller-001',
     type: 'SYSTEM',
-    title: '👋 Welcome to FuelFleet Demo',
+    title: '👋 Welcome to OOMCO Demo',
     message: 'Clients will place orders and you will receive a notification here instantly.',
     read: false,
     createdAt: new Date(Date.now() - 2 * 60 * 1000),

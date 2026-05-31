@@ -127,7 +127,7 @@ savedUser
           </div>
           <h2 className="text-3xl font-bold text-gray-900 mb-4">Account Created!</h2>
           <p className="text-gray-600 mb-6">
-            Welcome to FuelFleet, {formData.firstName}!<br />
+            Welcome to OOMCO, {formData.firstName}!<br />
             Your depot is ready at <strong>Oman Seeb</strong>.
           </p>
           <div className="bg-blue-50 p-4 rounded-lg text-sm text-left">
