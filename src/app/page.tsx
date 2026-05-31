@@ -114,12 +114,13 @@ export default function Home() {
 
         {/* Header */}
         <header className="flex-shrink-0 border-b border-slate-200/70 bg-white/80 backdrop-blur-sm">
-          <div className="max-w-5xl mx-auto px-6 h-13 flex items-center justify-between py-3.5">
+          <div className="relative max-w-5xl mx-auto px-6 h-13 flex items-center justify-between py-3.5">
             <div className="flex items-center gap-2.5">
               <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-xs shadow-sm">⛽</div>
               <span className="font-black text-base text-slate-900 tracking-tight">FuelFleet</span>
               <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest border border-slate-200 rounded px-1.5 py-0.5 ml-1">ANPTCO</span>
             </div>
+            <span className="hidden md:inline absolute left-1/2 -translate-x-1/2 text-blue-600 text-[11px] font-bold uppercase tracking-widest">Fuel Ordering &amp; Monitoring Platform</span>
             <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-semibold">
               <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
               Live System
@@ -132,11 +133,6 @@ export default function Home() {
 
           {/* ── HERO ── */}
           <section className="text-center">
-            <div className="inline-flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-full px-3.5 py-1 mb-4">
-              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
-              <span className="text-blue-600 text-[11px] font-bold uppercase tracking-widest">Fuel Ordering &amp; Monitoring Platform</span>
-            </div>
-
             <h1 className="text-4xl md:text-5xl font-black leading-tight tracking-tight text-slate-900 mb-2">
               Detect. Monitor.
               <span className="block text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-500">
