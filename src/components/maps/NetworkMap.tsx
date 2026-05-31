@@ -22,12 +22,12 @@ const HUB: Pt = { x: 600, y: 525 };
 // Destinations live in the left/right margins + corners — never the centre.
 // Labelled with Omani cities (positions are decorative, not geographic).
 const NODES: Array<Pt & { color: string; dur: number; begin: number; name: string }> = [
-  { x: 270,  y: 120, color: '#3b82f6', dur: 7.0, begin: 0.0, name: 'Sohar'   },
-  { x: 95,   y: 310, color: '#0ea5e9', dur: 6.5, begin: 2.6, name: 'Buraimi' },
-  { x: 300,  y: 500, color: '#f97316', dur: 8.5, begin: 2.0, name: 'Nizwa'   },
-  { x: 935,  y: 120, color: '#06b6d4', dur: 8.0, begin: 1.2, name: 'Khasab'  },
-  { x: 1120, y: 310, color: '#22c55e', dur: 7.2, begin: 0.3, name: 'Sur'     },
-  { x: 905,  y: 500, color: '#8b5cf6', dur: 7.5, begin: 1.6, name: 'Ibri'    },
+  { x: 270,  y: 120, color: '#172554', dur: 7.0, begin: 0.0, name: 'Sohar'   },
+  { x: 95,   y: 310, color: '#0c4a6e', dur: 6.5, begin: 2.6, name: 'Buraimi' },
+  { x: 300,  y: 500, color: '#7c2d12', dur: 8.5, begin: 2.0, name: 'Nizwa'   },
+  { x: 935,  y: 120, color: '#164e63', dur: 8.0, begin: 1.2, name: 'Khasab'  },
+  { x: 1120, y: 310, color: '#14532d', dur: 7.2, begin: 0.3, name: 'Sur'     },
+  { x: 905,  y: 500, color: '#4c1d95', dur: 7.5, begin: 1.6, name: 'Ibri'    },
 ];
 
 /** Orthogonal "elbow" route from a → b: a straight horizontal run out of the depot,
@@ -84,14 +84,19 @@ export default function NetworkMap({ className = '' }: { className?: string }) {
       {/* Destination nodes + arrival pulse */}
       {NODES.map((n, i) => (
         <g key={`n${i}`}>
-          {/* arrival pulse — fires as the dot reaches the node */}
-          <circle cx={n.x} cy={n.y} r="4" fill="none" stroke={n.color} strokeWidth="2" opacity="0">
-            <animate attributeName="r" values="4;4;20;20" dur={`${n.dur}s`} begin={`${n.begin}s`} repeatCount="indefinite" keyTimes="0;0.8;0.97;1" />
-            <animate attributeName="opacity" values="0;0;0.6;0" dur={`${n.dur}s`} begin={`${n.begin}s`} repeatCount="indefinite" keyTimes="0;0.8;0.88;1" />
+          {/* gentle breathing ring — always alive */}
+          <circle cx={n.x} cy={n.y} r="9" fill="none" stroke={n.color} strokeWidth="2" opacity="0.55">
+            <animate attributeName="r" values="9;13;9" dur="3.2s" begin={`${n.begin}s`} repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.55;0.2;0.55" dur="3.2s" begin={`${n.begin}s`} repeatCount="indefinite" />
           </circle>
-          <circle cx={n.x} cy={n.y} r="5" fill="white" stroke={n.color} strokeWidth="2.5" />
-          <circle cx={n.x} cy={n.y} r="2" fill={n.color} />
-          <text x={n.x} y={n.y + 18} textAnchor="middle" fontSize="11" fontWeight="600" fill="#475569" fontFamily="sans-serif">{n.name}</text>
+          {/* arrival pulse — fires as the dot reaches the node */}
+          <circle cx={n.x} cy={n.y} r="4" fill="none" stroke={n.color} strokeWidth="2.5" opacity="0">
+            <animate attributeName="r" values="4;4;22;22" dur={`${n.dur}s`} begin={`${n.begin}s`} repeatCount="indefinite" keyTimes="0;0.8;0.97;1" />
+            <animate attributeName="opacity" values="0;0;0.8;0" dur={`${n.dur}s`} begin={`${n.begin}s`} repeatCount="indefinite" keyTimes="0;0.8;0.88;1" />
+          </circle>
+          {/* solid deep core */}
+          <circle cx={n.x} cy={n.y} r="7" fill={n.color} stroke="white" strokeWidth="2.5" />
+          <text x={n.x} y={n.y + 19} textAnchor="middle" fontSize="11.5" fontWeight="700" fill="#1e293b" fontFamily="sans-serif">{n.name}</text>
         </g>
       ))}
 
@@ -118,7 +123,6 @@ export default function NetworkMap({ className = '' }: { className?: string }) {
       </circle>
       <circle cx={HUB.x} cy={HUB.y} r="9" fill="#2563eb" stroke="white" strokeWidth="3" />
       <circle cx={HUB.x} cy={HUB.y} r="3.5" fill="white" />
-      <text x={HUB.x} y={HUB.y + 26} textAnchor="middle" fontSize="13" fontWeight="700" fill="#1e3a8a" fontFamily="sans-serif">⛽ Fuel Depot</text>
     </svg>
   );
 }

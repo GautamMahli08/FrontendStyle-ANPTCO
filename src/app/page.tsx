@@ -33,6 +33,7 @@ const CAPABILITY_CARDS = [
     desc:  'Galileosky sensors report fuel levels for every truck compartment every 10–30 seconds. Calibration tables convert raw sensor values to exact litres.',
     tags:  ['Galileosky IoT', 'AWS IoT Core', 'flespi MQTT'],
     tagCls:'bg-blue-100 text-blue-700',
+    accent:'bg-gradient-to-r from-blue-500 to-cyan-500',
   },
   {
     cls:     'border-red-200    bg-red-50/70',
@@ -44,6 +45,7 @@ const CAPABILITY_CARDS = [
     desc:  'Unexpected fuel drops outside active delivery windows trigger anomaly alerts classified HIGH / MEDIUM / LOW, routed to the seller manager instantly.',
     tags:  ['Anomaly Detection', 'Real-time Alerts', 'Event Log'],
     tagCls:'bg-red-100 text-red-700',
+    accent:'bg-gradient-to-r from-red-500 to-orange-500',
   },
   {
     cls:     'border-purple-200 bg-purple-50/70',
@@ -55,6 +57,7 @@ const CAPABILITY_CARDS = [
     desc:  "Delivery only unlocks when the truck enters the client's geofence and the client scans the truck's unique QR code. Return-to-depot completes the cycle.",
     tags:  ['Haversine Geofencing', 'QR Scan Lock', 'Journey Cycle'],
     tagCls:'bg-purple-100 text-purple-700',
+    accent:'bg-gradient-to-r from-purple-500 to-indigo-500',
   },
 ];
 
@@ -106,7 +109,7 @@ export default function Home() {
         <NetworkMap className="absolute inset-0 w-full h-full" />
         {/* Soft vignette — keeps the centre content readable while the grid shows through */}
         <div className="absolute inset-0"
-          style={{ background: 'radial-gradient(ellipse 72% 64% at 50% 46%, rgba(255,255,255,0.45) 25%, rgba(255,255,255,0.72) 100%)' }} />
+          style={{ background: 'radial-gradient(ellipse 72% 64% at 50% 46%, rgba(255,255,255,0.4) 22%, rgba(255,255,255,0.45) 100%)' }} />
       </div>
 
       {/* ── CONTENT ── */}
@@ -132,15 +135,18 @@ export default function Home() {
         <main className="flex-1 min-h-0 flex flex-col justify-start gap-6 py-6 px-6">
 
           {/* ── HERO ── */}
-          <section className="text-center">
+          <section className="relative text-center animate-fade-up stagger-1">
+            {/* Animated aurora glow behind the headline */}
+            <div aria-hidden className="pointer-events-none absolute left-1/2 top-[42%] -z-10 h-72 w-[42rem] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-blue-300/40 via-cyan-200/30 to-indigo-300/40 blur-3xl animate-aurora" />
+
             <h1 className="text-4xl md:text-5xl font-black leading-tight tracking-tight text-slate-900 mb-2">
               Detect. Monitor.
-              <span className="block text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-500">
+              <span className="block bg-[length:200%_auto] bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-cyan-500 to-blue-600 animate-shimmer">
                 Prevent Fuel Theft.
               </span>
             </h1>
 
-            <p className="text-slate-500 text-sm md:text-base max-w-xl mx-auto mb-4">
+            <p className="text-slate-500 text-sm md:text-base max-w-xl mx-auto mb-5">
               Real-time IoT tracking · Geofenced delivery · QR-secured offloading · Built for{' '}
               <span className="text-slate-700 font-semibold">ANPTCO</span>
             </p>
@@ -148,7 +154,7 @@ export default function Home() {
             {/* Feature pills */}
             <div className="flex flex-wrap justify-center gap-2">
               {FEATURE_PILLS.map(f => (
-                <span key={f.label} className={`inline-flex items-center gap-1.5 border rounded-full px-3 py-1 text-xs font-semibold bg-white/80 backdrop-blur-sm ${f.cls}`}>
+                <span key={f.label} className={`inline-flex items-center gap-1.5 border rounded-full px-3 py-1 text-xs font-semibold bg-white/80 backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm ${f.cls}`}>
                   <span className="text-sm leading-none">{f.icon}</span>
                   {f.label}
                 </span>
@@ -157,10 +163,12 @@ export default function Home() {
           </section>
 
           {/* ── CAPABILITY CARDS ── */}
-          <section className="grid grid-cols-3 gap-3 max-w-3xl mx-auto w-full">
+          <section className="grid grid-cols-3 gap-3 max-w-3xl mx-auto w-full animate-fade-up stagger-2">
             {CAPABILITY_CARDS.map(card => (
-              <div key={card.title} className={`border rounded-xl p-4 bg-white/85 backdrop-blur-sm shadow-sm ${card.cls}`}>
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center mb-2.5 ${card.iconCls}`}>
+              <div key={card.title} className={`group relative overflow-hidden border rounded-xl p-4 bg-white/85 backdrop-blur-sm shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${card.cls}`}>
+                {/* top accent bar — grows on hover */}
+                <span className={`absolute inset-x-0 top-0 h-0.5 origin-left scale-x-0 transition-transform duration-300 group-hover:scale-x-100 ${card.accent}`} />
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center mb-2.5 transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3 ${card.iconCls}`}>
                   {card.icon}
                 </div>
                 <p className="text-xs font-bold text-slate-800 mb-1.5 leading-tight">{card.title}</p>
@@ -175,7 +183,7 @@ export default function Home() {
           </section>
 
           {/* ── ROLE SELECTOR ── */}
-          <section>
+          <section className="animate-fade-up stagger-3">
             <div className="text-center mb-3">
               <h2 className="text-base font-bold text-slate-700">Enter the Platform</h2>
               <p className="text-slate-400 text-xs mt-0.5">Select a role to explore its dashboard — no login required</p>
@@ -195,9 +203,9 @@ export default function Home() {
                         key={persona.id}
                         onClick={() => quickLogin(persona.id)}
                         disabled={isLoading}
-                        className={`group flex items-center gap-3 bg-white border ${theme.card} rounded-xl px-4 py-2.5 text-left transition-all duration-150 shadow-sm hover:shadow-md disabled:opacity-50`}
+                        className={`group flex items-center gap-3 bg-white border ${theme.card} rounded-xl px-4 py-2.5 text-left transition-all duration-200 shadow-sm hover:shadow-md hover:-translate-y-0.5 disabled:opacity-50`}
                       >
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-base flex-shrink-0 ${theme.iconBg}`}>
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-base flex-shrink-0 transition-transform duration-200 group-hover:scale-110 ${theme.iconBg}`}>
                           {persona.icon}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -209,7 +217,7 @@ export default function Home() {
                         </div>
                         {isLoading
                           ? <svg className="w-4 h-4 text-slate-400 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                          : <svg className="w-4 h-4 text-slate-300 group-hover:text-slate-500 transition-colors flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
+                          : <svg className="w-4 h-4 text-slate-300 group-hover:text-slate-500 group-hover:translate-x-1 transition-all flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
                         }
                       </button>
                     );
