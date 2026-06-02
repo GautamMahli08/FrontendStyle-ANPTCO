@@ -3,7 +3,7 @@
 import { useRouter, usePathname } from 'next/navigation';
 import { UserRole } from '@/src/types';
 import { logout } from '@/src/lib/demo-data';
-import OomcoLogo from '@/src/components/OomcoLogo';
+import OomcoLogo from '@/src/components/assets/OomcoLogo';
 
 const nav: Record<UserRole, Array<{ name: string; path: string; icon: string }>> = {
   PLATFORM_ADMIN: [
