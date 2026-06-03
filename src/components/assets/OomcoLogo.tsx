@@ -7,10 +7,10 @@ import Image from 'next/image';
 export default function OomcoLogo({ className = 'w-7 h-7' }: { className?: string }) {
   return (
     <Image
-      src="/oomco-logo.svg"
+      src="/OomcoLogo.png"
       alt="OOMCO"
-      width={32}
-      height={32}
+      width={76}
+      height={40}
       className={className}
       priority
     />
