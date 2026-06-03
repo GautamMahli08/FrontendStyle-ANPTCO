@@ -925,7 +925,7 @@ export function getOrderTimeline(order: any, anomalies?: FuelAnomaly[]): OrderEv
 
 // ── Live journey tracking ─────────────────────────────────────
 // How long a depot → destination journey takes in the demo.
-export const JOURNEY_DURATION_MS = 30_000;
+export const JOURNEY_DURATION_MS = 60_000;
 
 /** 0 → 1 progress of an order's journey, derived from its tripStartedAt timestamp. */
 export function journeyProgress(order: any): number {
