@@ -10,7 +10,8 @@ import {
   DEMO_PERSONAS,
 } from '@/src/lib/demo-data';
 import NetworkMap from '@/src/components/maps/NetworkMap';
-import OomcoLogo from '@/src/components/OomcoLogo';
+import OomcoLogo from '@/src/components/assets/OomcoLogo';
+import AnptcoLogo from '@/src/components/assets/AnptcoLogo';
 
 // ── Hero feature pills ────────────────────────────────────────
 const FEATURE_PILLS = [
@@ -120,14 +121,14 @@ export default function Home() {
         <header className="flex-shrink-0 border-b border-slate-200/70 bg-white/80 backdrop-blur-sm">
           <div className="relative max-w-5xl mx-auto px-6 h-13 flex items-center justify-between py-3.5">
             <div className="flex items-center gap-2.5">
-              <OomcoLogo className="w-7 h-7 shrink-0" />
-              <span className="font-black text-base text-slate-900 tracking-tight">OOMCO</span>
-              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest border border-slate-200 rounded px-1.5 py-0.5 ml-1">ANPTCO</span>
+              <OomcoLogo className="w-13 h-8 shrink-0" />
+              {/* <span className="font-black text-base text-slate-900 tracking-tight">OOMCO</span> */}
+              {/* <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest border border-slate-200 rounded px-1.5 py-0.5 ml-1">ANPTCO</span> */}
             </div>
             <span className="hidden md:inline absolute left-1/2 -translate-x-1/2 text-blue-600 text-[11px] font-bold uppercase tracking-widest">Fuel Ordering &amp; Monitoring Platform</span>
             <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-semibold">
-              <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-              Live System
+              {/* <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" /> */}
+             <AnptcoLogo className="w-7 h-9 shrink-0" />
             </div>
           </div>
         </header>
@@ -148,8 +149,10 @@ export default function Home() {
             </h1>
 
             <p className="text-slate-500 text-sm md:text-base max-w-xl mx-auto mb-5">
-              Real-time IoT tracking · Geofenced delivery · QR-secured offloading · Built for{' '}
-              <span className="text-slate-700 font-semibold">ANPTCO</span>
+              Real-time IoT tracking · Geofenced delivery · QR-secured offloading <br/>Powered by  <span className="text-slate-700 font-semibold">ANPTCO
+              
+                
+                </span>
             </p>
 
             {/* Feature pills */}
