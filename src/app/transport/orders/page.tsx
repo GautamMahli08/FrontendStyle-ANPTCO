@@ -8,7 +8,7 @@ import Header  from '@/src/components/layout/Header';
 import {
   getCurrentUser, getOrders, getTrucks, getDrivers,
   updateOrder, updateTruck, updateDriver, addNotification,
-  addFuelAnomaly, checkTruckFitsOrder, truckFuelCapacity, orderFuelBreakdown, shortOrderId,
+  addFuelAnomaly, orderFuelBreakdown, shortOrderId,
   advanceJourneys, destinationCoords, FIXED_DEPOT, JOURNEY_DURATION_MS,
 } from '@/src/lib/demo-data';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
@@ -82,20 +82,8 @@ export default function TransportOrdersPage() {
     const truck  = trucks.find((t: any) => t.id === selectedTruck);
     if (!truck) return;
 
-    // Capacity guard — the truck must have enough compartment capacity for each
-    // ordered fuel type, otherwise it can't carry this order on its own.
-    const fit = checkTruckFitsOrder(truck, assigning);
-    if (!fit.ok) {
-      const lines = fit.shortfalls
-        .map(s => `• ${s.fuelType}: needs ${s.required.toLocaleString()}L, truck holds ${s.available.toLocaleString()}L`)
-        .join('\n');
-      alert(
-        `🚫 ${truck.registrationNumber} can't carry this order:\n\n${lines}\n\n` +
-        `Assign a truck with more ${fit.shortfalls.map(s => s.fuelType).join('/')} compartment capacity.`
-      );
-      return;
-    }
-
+    // No capacity check needed — every truck is a fixed 4 × 9,100 L layout and
+    // orders are capped at 4 compartments, so any truck can carry any order.
     const driver = drivers.find((d: any) => d.id === truck.assignedDriverId);
 
     updateOrder(assigning.id, {
@@ -394,19 +382,14 @@ export default function TransportOrdersPage() {
                 {idleTrucks.map((truck: any) => {
                   const driver = drivers.find((d: any) => d.id === truck.assignedDriverId);
                   const isSelected = selectedTruck === truck.id;
-                  const caps = truckFuelCapacity(truck);
-                  const fit = checkTruckFitsOrder(truck, assigning);
                   return (
                     <button
                       key={truck.id}
-                      onClick={() => fit.ok && setSelectedTruck(truck.id)}
-                      disabled={!fit.ok}
+                      onClick={() => setSelectedTruck(truck.id)}
                       className={`w-full text-left p-4 rounded-xl border-2 transition-all ${
-                        !fit.ok
-                          ? 'border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed'
-                          : isSelected
-                            ? 'border-blue-500 bg-blue-50'
-                            : 'border-gray-200 hover:border-gray-300'
+                        isSelected
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 hover:border-gray-300'
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -414,22 +397,10 @@ export default function TransportOrdersPage() {
                           <div className="flex items-center gap-2">
                             <p className="font-bold text-gray-900">{truck.registrationNumber}</p>
                             <span className="text-xs text-emerald-600 font-medium bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">IDLE</span>
-                            {!fit.ok && (
-                              <span className="text-xs text-red-600 font-semibold bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
-                                Insufficient {fit.shortfalls.map(s => s.fuelType).join(', ')}
-                              </span>
-                            )}
                           </div>
                           <p className="text-xs text-gray-500 mt-0.5">
                             {truck.compartments?.length} compartments · {truck.capacity?.toLocaleString()}L capacity
                           </p>
-                          <div className="flex flex-wrap gap-1.5 mt-1">
-                            {Object.entries(caps).map(([ft, cap]) => (
-                              <span key={ft} className="text-[10px] font-medium bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
-                                {ft} {(cap as number).toLocaleString()}L
-                              </span>
-                            ))}
-                          </div>
                           {driver && <p className="text-xs text-blue-600 mt-1">👤 {driver.firstName} {driver.lastName}</p>}
                         </div>
                         {isSelected && <span className="text-blue-600 font-bold text-lg">✓</span>}

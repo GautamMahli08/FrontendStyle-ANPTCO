@@ -16,8 +16,28 @@ import {
 } from '@/src/types';
 
 // ── Demo version — bump this to force a full localStorage reset ──
-const DEMO_VERSION = 'v3.5';
+const DEMO_VERSION = 'v3.6';
 const VERSION_KEY  = 'fuel_demo_version';
+
+// ── Fixed truck compartment model ─────────────────────────────
+// Every truck has the same physical layout: 4 compartments, each holding a
+// fixed 9,100 L. Compartments are generic (no preset fuel type) — the order
+// decides which fuel goes into each compartment at dispatch time. Orders are
+// placed in whole-compartment units, so a single truck (4 compartments) can
+// always carry any valid order and no per-truck capacity check is needed.
+export const COMPARTMENT_CAPACITY    = 9100;
+export const COMPARTMENTS_PER_TRUCK  = 4;
+export const MAX_ORDER_COMPARTMENTS  = COMPARTMENTS_PER_TRUCK;
+export const TRUCK_CAPACITY          = COMPARTMENT_CAPACITY * COMPARTMENTS_PER_TRUCK; // 36,400 L
+
+/** Standard 4 × 9,100 L compartment layout shared by every truck. */
+export function makeStandardCompartments(): Compartment[] {
+  return Array.from({ length: COMPARTMENTS_PER_TRUCK }, (_, i) => ({
+    id: i + 1,
+    capacity: COMPARTMENT_CAPACITY,
+    currentVolume: 0,
+  }));
+}
 
 // ── Fuel Anomaly (theft detection) ───────────────────────────
 export interface FuelAnomaly {
@@ -81,10 +101,12 @@ export const DELIVERY_ZONES = [
     clientName: 'Client 1',
     address: 'Qurum, Muscat, Oman',
     type: 'Petrol Station',
+    // Capacities & seed levels are whole multiples of one compartment (9,100 L)
+    // so many compartment-sized orders fit before a tank fills.
     fuels: {
-      DIESEL:  { base: 6000, capacity: 20000 },
-      PETROL:  { base: 2500, capacity: 10000 },
-      PREMIUM: { base: 1200, capacity: 5000  },
+      DIESEL:  { base: 18200, capacity: 182000 },  // 2 / 20 compartments
+      PETROL:  { base: 9100,  capacity: 136500 },  // 1 / 15 compartments
+      PREMIUM: { base: 9100,  capacity: 91000  },  // 1 / 10 compartments
     } as Record<string, { base: number; capacity: number }>,
   },
   {
@@ -97,9 +119,9 @@ export const DELIVERY_ZONES = [
     address: 'Al Khuwair, Muscat, Oman',
     type: 'Petrol Station',
     fuels: {
-      DIESEL:  { base: 4200, capacity: 20000 },
-      PETROL:  { base: 1800, capacity: 10000 },
-      PREMIUM: { base: 600,  capacity: 5000  },
+      DIESEL:  { base: 9100, capacity: 182000 },  // 1 / 20 compartments
+      PETROL:  { base: 9100, capacity: 136500 },  // 1 / 15 compartments
+      PREMIUM: { base: 0,    capacity: 91000  },  // 0 / 10 compartments
     } as Record<string, { base: number; capacity: number }>,
   },
 ];
@@ -256,6 +278,7 @@ const DEMO_USERS: User[] = [
 ];
 
 // ── Demo Trucks ───────────────────────────────────────────────
+// Every truck shares the fixed layout: 4 generic compartments × 9,100 L (36,400 L total).
 const DEMO_TRUCKS: Truck[] = [
   {
     id: 'truck-001',
@@ -264,12 +287,8 @@ const DEMO_TRUCKS: Truck[] = [
     tspId: 'tsp-001',
     tspName: 'Transporter 1',
     workspaceId: 'ws-anptco',
-    compartments: [
-      { id: 1, capacity: 5000, fuelType: 'DIESEL', currentVolume: 0 },
-      { id: 2, capacity: 5000, fuelType: 'DIESEL', currentVolume: 0 },
-      { id: 3, capacity: 4000, fuelType: 'PETROL', currentVolume: 0 },
-    ],
-    capacity: 14000,
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
     status: 'IDLE',
     currentLat: 23.670250,
     currentLng: 58.189120,
@@ -286,12 +305,8 @@ const DEMO_TRUCKS: Truck[] = [
     tspId: 'tsp-001',
     tspName: 'Transporter 1',
     workspaceId: 'ws-anptco',
-    compartments: [
-      { id: 1, capacity: 6000, fuelType: 'DIESEL',  currentVolume: 0 },
-      { id: 2, capacity: 4000, fuelType: 'PETROL',  currentVolume: 0 },
-      { id: 3, capacity: 3000, fuelType: 'PREMIUM', currentVolume: 0 },
-    ],
-    capacity: 13000,
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
     status: 'IDLE',
     currentLat: 23.670250,
     currentLng: 58.189120,
@@ -308,12 +323,8 @@ const DEMO_TRUCKS: Truck[] = [
     tspId: 'tsp-002',
     tspName: 'Transporter 2',
     workspaceId: 'ws-anptco',
-    compartments: [
-      { id: 1, capacity: 8000, fuelType: 'DIESEL', currentVolume: 0 },
-      { id: 2, capacity: 6000, fuelType: 'DIESEL', currentVolume: 0 },
-      { id: 3, capacity: 4000, fuelType: 'PETROL', currentVolume: 0 },
-    ],
-    capacity: 18000,
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
     status: 'IDLE',
     currentLat: 23.670250,
     currentLng: 58.189120,
@@ -330,12 +341,8 @@ const DEMO_TRUCKS: Truck[] = [
     tspId: 'tsp-002',
     tspName: 'Transporter 2',
     workspaceId: 'ws-anptco',
-    compartments: [
-      { id: 1, capacity: 4000, fuelType: 'DIESEL',  currentVolume: 0 },
-      { id: 2, capacity: 3000, fuelType: 'PETROL',  currentVolume: 0 },
-      { id: 3, capacity: 2000, fuelType: 'PREMIUM', currentVolume: 0 },
-    ],
-    capacity: 9000,
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
     status: 'PENDING_INTEGRATION',
     currentLat: 23.670250,
     currentLng: 58.189120,
@@ -756,31 +763,9 @@ export function orderFuelBreakdown(order: any): { fuelType: string; volume: numb
   return [];
 }
 
-/** Total compartment capacity a truck has for each fuel type. */
-export function truckFuelCapacity(truck: any): Record<string, number> {
-  const caps: Record<string, number> = {};
-  (truck?.compartments ?? []).forEach((c: any) => {
-    const ft = c.fuelType;
-    if (!ft) return;
-    caps[ft] = (caps[ft] ?? 0) + (c.capacity ?? 0);
-  });
-  return caps;
-}
-
-/**
- * Can a single truck carry this order? Checks, per fuel type, that the truck has
- * enough compartment capacity of that fuel to hold the ordered volume.
- */
-export function checkTruckFitsOrder(
-  truck: any,
-  order: any,
-): { ok: boolean; shortfalls: { fuelType: string; required: number; available: number }[] } {
-  const caps = truckFuelCapacity(truck);
-  const shortfalls = orderFuelBreakdown(order)
-    .map(({ fuelType, volume }) => ({ fuelType, required: volume, available: caps[fuelType] ?? 0 }))
-    .filter(s => s.required > s.available);
-  return { ok: shortfalls.length === 0, shortfalls };
-}
+// Per-truck capacity validation was removed: every truck is now a fixed
+// 4 × 9,100 L layout and orders are capped at 4 compartments, so any truck can
+// carry any valid order. The order decides which fuel fills each compartment.
 
 /**
  * Live stored level per fuel type for a station: seed `base` plus everything

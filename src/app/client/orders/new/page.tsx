@@ -4,7 +4,10 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, addOrder, addNotification, DELIVERY_ZONES, checkOrderFitsStation } from '@/src/lib/demo-data';
+import {
+  getCurrentUser, addOrder, addNotification, DELIVERY_ZONES, checkOrderFitsStation,
+  COMPARTMENT_CAPACITY, MAX_ORDER_COMPARTMENTS,
+} from '@/src/lib/demo-data';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
 
 const FUEL_TYPES = [
@@ -16,7 +19,6 @@ const FUEL_TYPES = [
     iconColor: 'text-blue-600',
     activeBorder: 'border-blue-500',
     activeBg: 'bg-blue-50',
-    presets: [1000, 3000, 5000, 10000],
     svg: (
       <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
         <ellipse cx="12" cy="6" rx="8" ry="3" />
@@ -33,7 +35,6 @@ const FUEL_TYPES = [
     iconColor: 'text-orange-600',
     activeBorder: 'border-orange-500',
     activeBg: 'bg-orange-50',
-    presets: [500, 1000, 2000, 5000],
     svg: (
       <svg width={20} height={20} viewBox="0 0 24 24" fill="currentColor" stroke="none">
         <path d="M12 2C9.5 6.5 7 9.5 7 13.5a5 5 0 0010 0C17 9.5 14.5 6.5 12 2zm0 15.5a3 3 0 01-3-3c0-1.8 1.2-3.5 3-5.5 1.8 2 3 3.7 3 5.5a3 3 0 01-3 3z" />
@@ -48,7 +49,6 @@ const FUEL_TYPES = [
     iconColor: 'text-purple-600',
     activeBorder: 'border-purple-500',
     activeBg: 'bg-purple-50',
-    presets: [500, 1000, 2000, 3000],
     svg: (
       <svg width={20} height={20} viewBox="0 0 24 24" fill="currentColor" stroke="none">
         <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />
@@ -56,8 +56,6 @@ const FUEL_TYPES = [
     ),
   },
 ];
-
-type FuelSelection = { volume: number; custom: string; useCustom: boolean };
 
 export default function NewOrderPage() {
   const router = useRouter();
@@ -67,8 +65,9 @@ export default function NewOrderPage() {
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Multi-fuel selection: key → { volume, custom, useCustom }
-  const [selected, setSelected] = useState<Record<string, FuelSelection>>({});
+  // Compartment-based selection: fuel key → number of full 9,100 L compartments.
+  // Fuel is ordered in whole compartments only — no partial volumes.
+  const [counts,     setCounts]     = useState<Record<string, number>>({});
   const [locationId, setLocationId] = useState('');
   const [notes,      setNotes]      = useState('');
 
@@ -81,35 +80,44 @@ export default function NewOrderPage() {
 
   if (!mounted || !user) return null;
 
-  const selectedKeys = Object.keys(selected);
-  const canProceed   = selectedKeys.length > 0 && selectedKeys.every(k => {
-    const s = selected[k];
-    return (s.useCustom ? parseInt(s.custom) || 0 : s.volume) >= 100;
-  });
-  const location  = DELIVERY_ZONES.find(z => z.id === locationId);
-
-  function getFinalVolume(s: FuelSelection) {
-    return s.useCustom ? (parseInt(s.custom) || 0) : s.volume;
-  }
+  const selectedKeys      = Object.keys(counts).filter(k => counts[k] > 0);
+  const totalCompartments = selectedKeys.reduce((sum, k) => sum + counts[k], 0);
+  const totalLitres       = totalCompartments * COMPARTMENT_CAPACITY;
+  const atMax             = totalCompartments >= MAX_ORDER_COMPARTMENTS;
+  const canProceed        = totalCompartments >= 1;
+  const location          = DELIVERY_ZONES.find(z => z.id === locationId);
 
   // Station capacity check — block ordering more than the station can still hold.
-  const orderFuelItems = selectedKeys.map(k => ({ fuelType: k, volume: getFinalVolume(selected[k]) }));
+  const orderFuelItems = selectedKeys.map(k => ({ fuelType: k, volume: counts[k] * COMPARTMENT_CAPACITY }));
   const stationCheck   = locationId ? checkOrderFitsStation(locationId, orderFuelItems) : { ok: true, exceeded: [] };
   const canSubmit      = canProceed && !!locationId && stationCheck.ok;
 
   function toggleFuel(key: string) {
-    setSelected(prev => {
-      if (prev[key]) {
+    setCounts(prev => {
+      if (prev[key] > 0) {
         const next = { ...prev };
         delete next[key];
         return next;
       }
-      return { ...prev, [key]: { volume: FUEL_TYPES.find(f => f.key === key)!.presets[1], custom: '', useCustom: false } };
+      if (totalCompartments >= MAX_ORDER_COMPARTMENTS) return prev; // truck is already full
+      return { ...prev, [key]: 1 };
     });
   }
 
-  function updateSelection(key: string, patch: Partial<FuelSelection>) {
-    setSelected(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+  // Book exactly `n` compartments for a fuel (0 removes it). The 4 compartments
+  // are a shared pool, so a selection that would push the order over the limit
+  // is ignored (those blocks are rendered non-selectable anyway).
+  function setFuelCompartments(key: string, n: number) {
+    setCounts(prev => {
+      if (n <= 0) {
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      }
+      const others = Object.entries(prev).reduce((s, [k, v]) => k === key ? s : s + v, 0);
+      if (others + n > MAX_ORDER_COMPARTMENTS) return prev;
+      return { ...prev, [key]: n };
+    });
   }
 
   const handleSubmit = () => {
@@ -117,7 +125,7 @@ export default function NewOrderPage() {
     setLoading(true);
     setTimeout(() => {
       const orderId   = `order-${Date.now()}`;
-      const fuelItems = selectedKeys.map(k => ({ fuelType: k, volume: getFinalVolume(selected[k]) }));
+      const fuelItems = selectedKeys.map(k => ({ fuelType: k, volume: counts[k] * COMPARTMENT_CAPACITY }));
       const isMixed   = fuelItems.length > 1;
 
       logDemoEvent(user.id, 'ORDER_PLACED',
@@ -158,8 +166,6 @@ export default function NewOrderPage() {
     }, 700);
   };
 
-  const totalLitres = selectedKeys.reduce((sum, k) => sum + getFinalVolume(selected[k]), 0);
-
   // ── Success ───────────────────────────────────────────────────
   if (success) {
     return (
@@ -174,7 +180,7 @@ export default function NewOrderPage() {
               <div className="space-y-1 mb-2">
                 {selectedKeys.map(k => (
                   <p key={k} className="text-gray-600 text-sm">
-                    {getFinalVolume(selected[k]).toLocaleString()}L {k}
+                    {counts[k]} × compartment · {(counts[k] * COMPARTMENT_CAPACITY).toLocaleString()}L {k}
                   </p>
                 ))}
                 <p className="text-gray-500 text-xs mt-1">→ {location?.name}</p>
@@ -185,7 +191,7 @@ export default function NewOrderPage() {
                   Track Orders
                 </button>
                 <button
-                  onClick={() => { setSuccess(false); setStep(1); setSelected({}); setLocationId(''); setNotes(''); }}
+                  onClick={() => { setSuccess(false); setStep(1); setCounts({}); setLocationId(''); setNotes(''); }}
                   className="flex-1 border border-gray-200 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition text-sm"
                 >
                   New Order
@@ -208,7 +214,7 @@ export default function NewOrderPage() {
 
             {/* Step indicator */}
             <div className="flex items-center gap-0 mb-8">
-              {(['Fuel & Volume', 'Delivery Location'] as const).map((label, i) => {
+              {(['Fuel & Compartments', 'Delivery Location'] as const).map((label, i) => {
                 const n = (i + 1) as 1 | 2;
                 const done = step > n;
                 const cur  = step === n;
@@ -230,16 +236,15 @@ export default function NewOrderPage() {
 
             <div className="bg-white border border-gray-200 rounded-2xl p-7 shadow-sm">
 
-              {/* ── STEP 1: Fuel & Volume ── */}
+              {/* ── STEP 1: Fuel & Compartments ── */}
               {step === 1 && (
                 <div>
-                  <h2 className="text-xl font-black text-gray-900 mb-1">Select Fuel & Quantities</h2>
-                  <p className="text-sm text-gray-500 mb-6">Choose one or more fuel types. Set the volume for each.</p>
+                  <h2 className="text-xl font-black text-gray-900 mb-6">Select Fuel & Quantities</h2>
 
                   <div className="space-y-3 mb-6">
                     {FUEL_TYPES.map(f => {
-                      const sel = selected[f.key];
-                      const isSelected = !!sel;
+                      const count      = counts[f.key] ?? 0;
+                      const isSelected = count > 0;
                       return (
                         <div
                           key={f.key}
@@ -250,7 +255,8 @@ export default function NewOrderPage() {
                           {/* Fuel type header — click to toggle */}
                           <button
                             onClick={() => toggleFuel(f.key)}
-                            className="w-full flex items-center gap-4 p-4 text-left"
+                            disabled={!isSelected && atMax}
+                            className="w-full flex items-center gap-4 p-4 text-left disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${f.iconBg} ${f.iconColor}`}>
                               {f.svg}
@@ -271,45 +277,44 @@ export default function NewOrderPage() {
                             </div>
                           </button>
 
-                          {/* Volume selector — only when selected */}
+                          {/* Compartment cards — fill progressively, drawn from the shared pool of 4 */}
                           {isSelected && (
                             <div className="px-4 pb-4 pt-0 border-t border-gray-100/80">
-                              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2.5 mt-3">Volume</p>
-                              <div className="flex flex-wrap gap-2 mb-3">
-                                {f.presets.map(v => (
-                                  <button
-                                    key={v}
-                                    onClick={() => updateSelection(f.key, { volume: v, useCustom: false })}
-                                    className={`px-3 py-1.5 rounded-lg border text-sm font-semibold transition-all ${
-                                      !sel.useCustom && sel.volume === v
-                                        ? `${f.activeBorder} bg-white ${f.iconColor}`
-                                        : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                                    }`}
-                                  >
-                                    {v.toLocaleString()}L
-                                  </button>
-                                ))}
-                                {/* Custom input */}
-                                <div className="relative">
-                                  <input
-                                    type="number"
-                                    min={100}
-                                    max={50000}
-                                    value={sel.custom}
-                                    onClick={e => e.stopPropagation()}
-                                    onChange={e => updateSelection(f.key, { custom: e.target.value, useCustom: true })}
-                                    placeholder="Custom"
-                                    className={`w-24 px-2.5 py-1.5 rounded-lg border text-sm font-semibold focus:outline-none transition ${
-                                      sel.useCustom ? `${f.activeBorder} ${f.activeBg}` : 'border-gray-200 focus:border-gray-400'
-                                    }`}
-                                  />
-                                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">L</span>
-                                </div>
+                              <div className="flex items-center justify-between mb-2.5 mt-3">
+                                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Volume</p>
+                                <p className={`text-xs font-bold ${f.iconColor}`}>{(count * COMPARTMENT_CAPACITY).toLocaleString()}L</p>
                               </div>
-                              {/* Confirmed volume display */}
-                              <p className={`text-xs font-bold ${f.iconColor}`}>
-                                {getFinalVolume(sel).toLocaleString()}L {f.label} selected
-                              </p>
+                              <div className="grid grid-cols-4 gap-2">
+                                {Array.from({ length: MAX_ORDER_COMPARTMENTS }, (_, i) => {
+                                  const filled       = i < count;
+                                  const othersBooked = totalCompartments - count;
+                                  const disabled     = !filled && othersBooked + (i + 1) > MAX_ORDER_COMPARTMENTS;
+                                  return (
+                                    <button
+                                      key={i}
+                                      onClick={() => setFuelCompartments(f.key, count === i + 1 ? i : i + 1)}
+                                      disabled={disabled}
+                                      className={`relative rounded-xl border-2 py-3 flex flex-col items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                                        filled ? `${f.activeBorder} ${f.activeBg}` : 'border-gray-200 bg-white hover:border-gray-300'
+                                      }`}
+                                    >
+                                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${filled ? `${f.iconBg} ${f.iconColor}` : 'bg-gray-100 text-gray-300'}`}>
+                                        {f.svg}
+                                      </div>
+                                      <span className={`text-[11px] font-bold leading-none ${filled ? f.iconColor : 'text-gray-400'}`}>
+                                        {COMPARTMENT_CAPACITY.toLocaleString()}L
+                                      </span>
+                                      {filled && (
+                                        <span className={`absolute top-1.5 right-1.5 w-4 h-4 rounded-full ${f.activeBorder} border-2 bg-white flex items-center justify-center`}>
+                                          <svg className={`w-2.5 h-2.5 ${f.iconColor}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={4} d="M5 13l4 4L19 7" />
+                                          </svg>
+                                        </span>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             </div>
                           )}
                         </div>
@@ -319,13 +324,13 @@ export default function NewOrderPage() {
 
                   {/* Summary pill */}
                   {selectedKeys.length > 0 && (
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-5 flex items-center justify-between">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-2 flex items-center justify-between">
                       <div className="flex flex-wrap gap-2">
                         {selectedKeys.map(k => {
                           const f = FUEL_TYPES.find(f => f.key === k)!;
                           return (
                             <span key={k} className={`text-xs font-bold px-2.5 py-1 rounded-full ${f.iconBg} ${f.iconColor}`}>
-                              {getFinalVolume(selected[k]).toLocaleString()}L {f.label}
+                              {counts[k]} × {(counts[k] * COMPARTMENT_CAPACITY).toLocaleString()}L {f.label}
                             </span>
                           );
                         })}
@@ -335,6 +340,11 @@ export default function NewOrderPage() {
                       </span>
                     </div>
                   )}
+
+                  {/* Compartment usage indicator */}
+                  <p className={`text-xs font-semibold mb-5 ${atMax ? 'text-amber-600' : 'text-gray-400'}`}>
+                    {totalCompartments} / {MAX_ORDER_COMPARTMENTS} compartments used{atMax ? ' — truck full' : ''}
+                  </p>
 
                   <button
                     onClick={() => setStep(2)}
@@ -388,7 +398,7 @@ export default function NewOrderPage() {
                           </p>
                         ))}
                       </div>
-                      <p className="text-[11px] text-red-500 mt-2">Reduce the volume or choose another station to continue.</p>
+                      <p className="text-[11px] text-red-500 mt-2">Reduce the compartments or choose another station to continue.</p>
                     </div>
                   )}
 
@@ -415,15 +425,16 @@ export default function NewOrderPage() {
                               <div className={`flex items-center gap-1.5 ${f.iconColor}`}>
                                 <div className={`w-5 h-5 rounded-md flex items-center justify-center ${f.iconBg}`}>{f.svg}</div>
                                 <span className="font-semibold text-gray-700">{f.label}</span>
+                                <span className="text-xs text-gray-400">({counts[k]} × {COMPARTMENT_CAPACITY.toLocaleString()}L)</span>
                               </div>
-                              <span className="font-bold text-gray-900">{getFinalVolume(selected[k]).toLocaleString()}L</span>
+                              <span className="font-bold text-gray-900">{(counts[k] * COMPARTMENT_CAPACITY).toLocaleString()}L</span>
                             </div>
                           );
                         })}
                       </div>
                       <div className="border-t border-emerald-200 pt-2.5 flex items-center justify-between text-sm">
                         <span className="text-emerald-700 font-semibold">📍 {location?.name}</span>
-                        <span className="font-black text-gray-900">{totalLitres.toLocaleString()}L total</span>
+                        <span className="font-black text-gray-900">{totalCompartments} compartments · {totalLitres.toLocaleString()}L</span>
                       </div>
                     </div>
                   )}
