@@ -179,7 +179,7 @@ export default function LiveTrackingMap({
       if (!depotRef.current && js[0]) {
         depotRef.current = L.marker([js[0].depot.lat, js[0].depot.lng], { icon: pinIcon('🏭', '#2563eb', 34) })
           .addTo(map)
-          .bindPopup(`<b>${js[0].depot.name}</b><br/>ANPTCO Depot`);
+          .bindPopup(`<b>${js[0].depot.name}</b><br/>Depot`);
       }
 
       const seen = new Set<string>();

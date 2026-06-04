@@ -120,7 +120,7 @@ export default function TransportOrdersPage() {
     addNotification({
       id: `notif-${Date.now()}`, userId: order.clientId ?? '',
       type: 'FUEL_LOADING', title: '🛢️ Loading Fuel',
-      message: `Your truck (${order.assignedTruckRegistration}) is being loaded at the ANPTCO depot.`,
+      message: `Your truck (${order.assignedTruckRegistration}) is being loaded at the depot.`,
       read: false, createdAt: new Date(),
     });
     // Open this order's detail so the TSP can watch the compartments fill live,

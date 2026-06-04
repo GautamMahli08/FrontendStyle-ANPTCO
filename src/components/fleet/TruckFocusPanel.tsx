@@ -50,9 +50,9 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
   // Placeholder shown in place of the map when the truck isn't on the road.
   const placeholder = (() => {
     if (!order)                        return { icon: '🅿️', title: 'Idle at depot', sub: 'No active order assigned' };
-    if (status === 'ASSIGNED')         return { icon: '🏭', title: 'At ANPTCO depot', sub: 'Awaiting fuel loading' };
-    if (status === 'LOADING')          return { icon: '🛢️', title: 'At ANPTCO depot', sub: 'Loading fuel into compartments' };
-    if (status === 'LOADED')           return { icon: '🛢️', title: 'At ANPTCO depot', sub: 'Loaded — ready to depart' };
+    if (status === 'ASSIGNED')         return { icon: '🏭', title: 'At depot', sub: 'Awaiting fuel loading' };
+    if (status === 'LOADING')          return { icon: '🛢️', title: 'At depot', sub: 'Loading fuel into compartments' };
+    if (status === 'LOADED')           return { icon: '🛢️', title: 'At depot', sub: 'Loaded — ready to depart' };
     if (status === 'COMPLETED')        return { icon: '✅', title: `Delivered at ${order.destinationName ?? 'station'}`, sub: 'Offloading complete' };
     return { icon: '🗺️', title: 'Not tracking', sub: '' };
   })();

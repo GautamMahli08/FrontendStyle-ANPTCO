@@ -79,7 +79,7 @@ export const updateFuelAnomaly = (id: string, updates: Partial<FuelAnomaly>) => 
 // FIXED DEPOT LOCATION
 export const FIXED_DEPOT = {
   id: 'depot-seeb',
-  name: 'ANPTCO Central Depot — Seeb',
+  name: 'Central Depot — Seeb',
   address: 'Seeb, Muscat, Oman',
   lat: 23.670250,
   lng: 58.189120,
@@ -859,7 +859,7 @@ export function getOrderTimeline(order: any, anomalies?: FuelAnomaly[]): OrderEv
     { seq: 2, key: 'tsp',      icon: '🏢', label: 'Assigned to transporter', at: toDate(order.assignedToTspAt),                            tone: 'default' },
     { seq: 3, key: 'truck',    icon: '🚛', label: 'Truck assigned',         detail: [order.assignedTruckRegistration, order.assignedDriverName].filter(Boolean).join(' · '), at: toDate(order.truckAssignedAt), tone: 'default' },
     { seq: 5, key: 'loaded',   icon: '🛢️', label: 'Fuel loaded',            detail: 'Compartments filled at depot', at: toDate(order.loadedAt),    tone: 'default' },
-    { seq: 6, key: 'enroute',  icon: '🚦', label: 'Journey started',        detail: 'Left ANPTCO depot', at: toDate(order.tripStartedAt),  tone: 'active' },
+    { seq: 6, key: 'enroute',  icon: '🚦', label: 'Journey started',        detail: 'Left depot', at: toDate(order.tripStartedAt),  tone: 'active' },
     { seq: 7, key: 'arrived',  icon: '📍', label: 'Arrived at station',     detail: order.destinationName, at: toDate(order.arrivedAt),    tone: 'active' },
     { seq: 8, key: 'done',     icon: '🔒', label: 'Delivery completed',     detail: 'QR verified', at: toDate(order.completedAt),          tone: 'success' },
   ];
