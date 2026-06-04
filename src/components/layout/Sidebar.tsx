@@ -78,16 +78,16 @@ export default function Sidebar({ userRole }: { userRole: UserRole }) {
     <aside className="w-60 bg-white border-r border-gray-100 min-h-screen flex flex-col shadow-sm flex-shrink-0">
 
       {/* Logo */}
-      <button
-        onClick={() => router.push('/')}
-        className="flex items-center gap-3 px-5 py-5 border-b border-gray-100 hover:bg-gray-50 transition w-full text-left"
-      >
-        <OomcoLogo className="w-8 h-8 flex-shrink-0" />
-        <div>
-          <p className="font-black text-gray-900 text-sm tracking-tight leading-tight">OOMCO</p>
-          <p className="text-[10px] text-gray-400 uppercase tracking-widest">ANPTCO</p>
-        </div>
-      </button>
+     <button
+  onClick={() => router.push('/')}
+  className="flex items-center justify-center px-5 py-5 border-b border-gray-100 hover:bg-gray-50 transition w-full"
+>
+  <OomcoLogo className="w-15 h-8 flex-shrink-0" />
+
+  <div>
+    {/* Future text here */}
+  </div>
+</button>
 
       {/* Role pill */}
       <div className="px-5 py-3 border-b border-gray-50">
