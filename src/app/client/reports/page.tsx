@@ -493,7 +493,7 @@ useEffect(() => {
         <main className="p-8">
           <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Platform Reports 📊</h1>
+              <h1 className="text-3xl font-bold text-gray-900">Platform Reports</h1>
               <p className="text-sm text-gray-500 mt-1">
                 System-wide analytics across all workspaces, users, and orders
               </p>
@@ -673,7 +673,7 @@ useEffect(() => {
                       <p className="text-xs text-gray-400 mt-0.5">Ranked by completed deliveries</p>
                     </div>
                     <button onClick={() => setTab('workspaces')} className="text-sm text-blue-600 hover:underline">
-                      Full view →
+                      Full view
                     </button>
                   </div>
                   <div className="space-y-3">

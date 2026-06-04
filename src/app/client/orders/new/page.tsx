@@ -351,7 +351,7 @@ export default function NewOrderPage() {
                     disabled={!canProceed}
                     className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold py-3.5 rounded-xl transition text-sm"
                   >
-                    Continue →
+                    Continue
                   </button>
                 </div>
               )}

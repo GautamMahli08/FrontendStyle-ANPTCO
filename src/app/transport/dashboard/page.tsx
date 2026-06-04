@@ -14,21 +14,6 @@ const STATUS_COLOR: Record<string, string> = {
   COMPLETED:       'bg-emerald-100 text-emerald-700',
 };
 
-const TRUCK_STATUS_COLOR: Record<string, string> = {
-  IDLE:                'bg-emerald-100 text-emerald-700',
-  EN_ROUTE:            'bg-blue-100   text-blue-700',
-  ASSIGNED:            'bg-indigo-100 text-indigo-700',
-  ARRIVED:             'bg-teal-100   text-teal-700',
-  PENDING_INTEGRATION: 'bg-gray-100   text-gray-500',
-};
-
-const DEMO_FUEL: Record<string, number[]> = {
-  'truck-001': [82, 95],
-  'truck-002': [61, 40],
-  'truck-003': [97],
-  'truck-004': [0, 0, 0],
-};
-
 function fuelSummary(order: any): string {
   if (order.fuelItems?.length > 1) {
     return order.fuelItems.map((f: any) => `${f.volume.toLocaleString()}L ${f.fuelType}`).join(' + ');
@@ -42,7 +27,6 @@ export default function TransportDashboard() {
   const [trucks,  setTrucks]  = useState<any[]>([]);
   const [orders,  setOrders]  = useState<any[]>([]);
   const [mounted, setMounted] = useState(false);
-  const [tick,    setTick]    = useState(0);
 
   const load = useCallback((u: any) => {
     setTrucks(getTrucks().filter((t: any) => t.tspId === u.id));
@@ -55,9 +39,8 @@ export default function TransportDashboard() {
     if (!u || u.role !== 'TRANSPORT_ADMIN') { router.push('/'); return; }
     setUser(u);
     load(u);
-    const iv  = setInterval(() => load(u), 4000);
-    const tiv = setInterval(() => setTick(t => t + 1), 2500);
-    return () => { clearInterval(iv); clearInterval(tiv); };
+    const iv = setInterval(() => load(u), 4000);
+    return () => clearInterval(iv);
   }, [router, load]);
 
   if (!mounted || !user) return null;
@@ -106,7 +89,7 @@ export default function TransportDashboard() {
                 onClick={() => router.push('/transport/orders')}
                 className="bg-amber-600 hover:bg-amber-700 text-white font-black px-5 py-2.5 rounded-xl text-sm transition flex-shrink-0"
               >
-                Review &amp; Assign →
+                Review &amp; Assign
               </button>
             </div>
           )}
@@ -127,7 +110,7 @@ export default function TransportDashboard() {
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                 <h2 className="font-bold text-gray-900 text-sm">Orders</h2>
                 <button onClick={() => router.push('/transport/orders')} className="text-xs text-blue-600 hover:text-blue-700 font-semibold transition">
-                  Manage All →
+                  Manage All
                 </button>
               </div>
               <div className="divide-y divide-gray-50">
@@ -231,95 +214,6 @@ export default function TransportDashboard() {
             </div>
           </div>
 
-          {/* Live Fleet Telemetry */}
-          <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <div>
-                <h2 className="font-bold text-gray-900 text-sm">Live Fleet Telemetry</h2>
-                <p className="text-xs text-gray-400 mt-0.5">Per-compartment fuel levels · auto-refresh</p>
-              </div>
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
-                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />LIVE
-              </span>
-            </div>
-            <div className="divide-y divide-gray-50">
-              {trucks.length === 0 ? (
-                <div className="px-6 py-10 text-center">
-                  <p className="text-3xl mb-2">🚛</p>
-                  <p className="text-sm text-gray-400">No trucks registered.</p>
-                </div>
-              ) : trucks.map(truck => {
-                const fuelPcts = DEMO_FUEL[truck.id] ?? truck.compartments?.map(() => 80);
-                return (
-                  <div key={truck.id} className="px-6 py-4 hover:bg-slate-50 transition">
-                    <div className="flex items-center gap-4 flex-wrap">
-                      {/* Identity */}
-                      <div className="flex items-center gap-3 w-44 flex-shrink-0">
-                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base flex-shrink-0 ${
-                          truck.status === 'EN_ROUTE' ? 'bg-blue-100' : truck.status === 'IDLE' ? 'bg-emerald-100' : 'bg-slate-100'
-                        }`}>🚛</div>
-                        <div>
-                          <p className="font-bold text-gray-900 text-sm">{truck.registrationNumber}</p>
-                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${TRUCK_STATUS_COLOR[truck.status] ?? 'bg-gray-100 text-gray-500'}`}>
-                            {truck.status?.replace(/_/g, ' ')}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Compartment bars */}
-                      <div className="flex gap-2 flex-1 flex-wrap">
-                        {truck.compartments?.map((c: any, ci: number) => {
-                          const pct = Math.min(100, Math.max(0, (fuelPcts[ci] ?? 0) + (tick % 3 === 0 ? Math.floor(Math.random() * 3) - 1 : 0)));
-                          return (
-                            <div key={c.id} className="bg-slate-50 rounded-xl p-3 border border-slate-100 min-w-[90px]">
-                              <div className="flex justify-between items-center mb-1.5">
-                                <span className="text-[10px] text-gray-400 font-medium">C{c.id} · {c.fuelType}</span>
-                                <span className={`text-[10px] font-black ${pct > 50 ? 'text-emerald-600' : pct > 25 ? 'text-amber-600' : 'text-red-600'}`}>{pct}%</span>
-                              </div>
-                              <div className="w-full bg-gray-100 rounded-full h-1.5">
-                                <div
-                                  className={`h-1.5 rounded-full transition-all duration-700 ${pct > 50 ? 'bg-emerald-500' : pct > 25 ? 'bg-amber-500' : 'bg-red-500'}`}
-                                  style={{ width: `${pct}%` }}
-                                />
-                              </div>
-                              <p className="text-[10px] text-gray-400 mt-1">{Math.round(c.capacity * pct / 100).toLocaleString()}L</p>
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      {/* QR status */}
-                      <div className="flex-shrink-0 text-right">
-                        <p className="text-[10px] text-gray-400 mb-0.5">QR</p>
-                        <span className={`text-xs font-bold ${truck.qrCode ? 'text-emerald-600' : 'text-orange-500'}`}>
-                          {truck.qrCode ? '✓ Ready' : 'Pending'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Completed deliveries */}
-          {done.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="px-5 py-4 border-b border-gray-100">
-                <h2 className="font-bold text-gray-900 text-sm">Completed Deliveries</h2>
-              </div>
-              <div className="grid sm:grid-cols-3 lg:grid-cols-4 gap-3 p-4">
-                {done.map(o => (
-                  <div key={o.id} className="border border-emerald-200 bg-emerald-50 rounded-xl p-3">
-                    <p className="font-bold text-emerald-800 text-sm">#{shortOrderId(o.id)}</p>
-                    <p className="text-xs text-emerald-600 mt-0.5">{fuelSummary(o)}</p>
-                    <p className="text-[11px] text-emerald-500 mt-0.5">{o.destinationName}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
         </main>
       </div>
     </div>
@@ -365,7 +259,7 @@ function ActionItem({ step, title, desc, urgent, onClick, cta, done }: {
           <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
           {(urgent || (!done && step === 2)) && (
             <button onClick={onClick} className="mt-2 text-xs font-bold text-blue-600 hover:text-blue-700 transition">
-              {cta} →
+              {cta}
             </button>
           )}
         </div>

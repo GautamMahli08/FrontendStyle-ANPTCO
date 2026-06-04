@@ -148,7 +148,7 @@ export default function TransportTicketsPage() {
         <main className="p-8">
           <div className="flex items-center justify-between mb-8">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">Support Tickets 🎫</h1>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">Support Tickets</h1>
               <p className="text-gray-600">Get help and support from the platform team</p>
             </div>
             <button

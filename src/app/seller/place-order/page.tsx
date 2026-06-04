@@ -158,7 +158,7 @@ export default function PlaceOrderPage() {
         
         <main className="p-8">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Place New Order 📦</h1>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Place New Order</h1>
             <p className="text-gray-600">Create a new fuel delivery order for your clients</p>
           </div>
 

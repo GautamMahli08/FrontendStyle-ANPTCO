@@ -415,7 +415,7 @@ export default function SellerReportsPage() {
         <main className="p-8">
           <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Reports 📊</h1>
+              <h1 className="text-3xl font-bold text-gray-900">Reports</h1>
               <p className="text-sm text-gray-500 mt-1">
                 Order volume, client activity, and TSP performance
               </p>

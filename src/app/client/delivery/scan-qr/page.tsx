@@ -7,8 +7,9 @@ import Header  from '@/src/components/layout/Header';
 import { getCurrentUser, getOrders, getTrucks, updateOrder, updateTruck, addNotification, shortOrderId } from '@/src/lib/demo-data';
 import { qrMatchesTruck } from '@/src/lib/truck-qr';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
+import CompartmentFuel from '@/src/components/fleet/CompartmentFuel';
 
-type Stage = 'idle' | 'camera' | 'processing' | 'confirmed';
+type Stage = 'idle' | 'camera' | 'review' | 'processing' | 'confirmed' | 'rejected';
 
 export default function ScanQRPage() {
   const router = useRouter();
@@ -19,6 +20,8 @@ export default function ScanQRPage() {
   const [stage,     setStage]     = useState<Stage>('idle');
   const [camError,  setCamError]  = useState<string | null>(null);
   const [scanHint,  setScanHint]  = useState('Point camera at the QR code on the truck');
+  const [rejecting,    setRejecting]    = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
 
   const videoRef    = useRef<HTMLVideoElement>(null);
   const canvasRef   = useRef<HTMLCanvasElement>(null);
@@ -108,7 +111,9 @@ export default function ScanQRPage() {
     if (qrMatchesTruck(qrData, { id: assignedId })) {
       stopCamera();
       setScanHint('✓ Truck verified');
-      confirmDelivery();
+      // Truck is verified — show the per-compartment fuel status so the client
+      // can review what's being delivered before accepting or rejecting.
+      setStage('review');
       return;
     }
 
@@ -161,6 +166,51 @@ export default function ScanQRPage() {
     }, 800);
   }
 
+  // ── Reject delivery ───────────────────────────────────────────
+  function rejectDelivery() {
+    if (!order) return;
+    const reason = rejectReason.trim();
+
+    updateOrder(order.id, {
+      status: 'DELIVERY_REJECTED',
+      rejectedAt: new Date(),
+      rejectionReason: reason || undefined,
+    });
+    // Truck keeps its fuel and returns to the depot.
+    if (order.assignedTruckId) updateTruck(order.assignedTruckId, { status: 'RETURNING' });
+
+    logDemoEvent(
+      user?.id ?? 'client',
+      'DELIVERY_REJECTED',
+      `orderId=${order.id} | truck=${truck?.registrationNumber} | reason=${reason || 'n/a'}`
+    );
+
+    const reasonLine = reason ? ` Reason: ${reason}` : '';
+    if (order.assignedDriverId) {
+      addNotification({
+        id: `notif-${Date.now()}-d`, userId: order.assignedDriverId,
+        type: 'DELIVERY_REJECTED', title: '⛔ Delivery Rejected',
+        message: `Client rejected delivery for order #${shortOrderId(order.id)}.${reasonLine} Return fuel to depot.`,
+        read: false, createdAt: new Date(),
+      });
+    }
+    addNotification({
+      id: `notif-${Date.now()}-s`, userId: 'seller-001',
+      type: 'DELIVERY_REJECTED', title: '⛔ Delivery Rejected',
+      message: `Order #${shortOrderId(order.id)} was rejected by ${order.destinationName ?? 'the client'}.${reasonLine}`,
+      read: false, createdAt: new Date(),
+    });
+    if (order.assignedTSPId) {
+      addNotification({
+        id: `notif-${Date.now()}-t`, userId: order.assignedTSPId,
+        type: 'DELIVERY_REJECTED', title: '⛔ Delivery Rejected',
+        message: `Order #${shortOrderId(order.id)} was rejected on arrival.${reasonLine}`,
+        read: false, createdAt: new Date(),
+      });
+    }
+    setStage('rejected');
+  }
+
   if (!mounted || !user) return null;
 
   // ── Confirmed ─────────────────────────────────────────────────
@@ -179,12 +229,50 @@ export default function ScanQRPage() {
               </div>
               <h2 className="text-2xl font-black text-gray-900 mb-2">Delivery Confirmed</h2>
               <p className="text-gray-500 text-sm mb-1">Order #{shortOrderId(order?.id)} completed.</p>
+              <p className="text-gray-400 text-xs mb-1">
+                {order?.volume?.toLocaleString()}L {order?.fuelType} received
+              </p>
               <p className="text-gray-400 text-xs mb-8">
-                {order?.volume?.toLocaleString()}L {order?.fuelType} received · {truck?.registrationNumber}
+                📧 A delivery confirmation has been sent to <span className="font-semibold text-gray-500">{user.email}</span>
               </p>
               <button
                 onClick={() => router.push('/client/orders')}
                 className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition"
+              >
+                Back to My Orders
+              </button>
+            </div>
+          </main>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Rejected ──────────────────────────────────────────────────
+  if (stage === 'rejected') {
+    return (
+      <div className="flex min-h-screen bg-slate-50">
+        <Sidebar userRole={user.role} />
+        <div className="flex-1 min-w-0">
+          <Header user={user} />
+          <main className="p-6 flex items-center justify-center min-h-[70vh]">
+            <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center max-w-md w-full shadow-lg">
+              <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-5">
+                <svg className="w-10 h-10 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </div>
+              <h2 className="text-2xl font-black text-gray-900 mb-2">Delivery Rejected</h2>
+              <p className="text-gray-500 text-sm mb-1">Order #{shortOrderId(order?.id)} was rejected.</p>
+              {rejectReason.trim() && (
+                <p className="text-gray-400 text-xs mb-2">Reason: {rejectReason.trim()}</p>
+              )}
+              <p className="text-gray-400 text-xs mb-8">
+                The transporter has been notified to return the fuel to the depot.
+              </p>
+              <button
+                onClick={() => router.push('/client/orders')}
+                className="w-full bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 rounded-xl transition"
               >
                 Back to My Orders
               </button>
@@ -208,7 +296,7 @@ export default function ScanQRPage() {
               <p className="font-bold text-gray-900 mb-1">No delivery to scan</p>
               <p className="text-sm text-gray-500 mb-5">This page activates when your truck has arrived at your location.</p>
               <button onClick={() => router.push('/client/orders')} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition">
-                View My Orders →
+                View My Orders
               </button>
             </div>
           </main>
@@ -248,7 +336,9 @@ export default function ScanQRPage() {
                 </div>
                 <div>
                   <p className="text-xs text-gray-400">Status</p>
-                  <p className="font-bold text-emerald-600">Arrived — awaiting scan</p>
+                  <p className="font-bold text-emerald-600">
+                    {stage === 'review' ? 'Verified — review fuel' : 'Arrived — awaiting scan'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -295,8 +385,84 @@ export default function ScanQRPage() {
               {stage === 'processing' && (
                 <div className="flex flex-col items-center justify-center py-16 gap-4">
                   <div className="w-14 h-14 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-                  <p className="text-sm font-semibold text-gray-700">Verifying QR code…</p>
-                  <p className="text-xs text-gray-400">Matching truck identity</p>
+                  <p className="text-sm font-semibold text-gray-700">Confirming delivery…</p>
+                  <p className="text-xs text-gray-400">Updating order</p>
+                </div>
+              )}
+
+              {/* Review state — verified truck, inspect fuel, accept or reject */}
+              {stage === 'review' && (
+                <div className="p-5 space-y-4">
+                  {/* Verified banner */}
+                  <div className="flex items-center gap-2.5 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
+                    <span className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                      <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </span>
+                    <div>
+                      <p className="text-sm font-bold text-emerald-800">Truck verified</p>
+                      <p className="text-xs text-emerald-600">{truck?.registrationNumber} matched your order</p>
+                    </div>
+                  </div>
+
+                  {/* Per-compartment fuel status (same readout as Fleet Monitoring) */}
+                  <div className="border border-gray-200 rounded-xl p-3">
+                    <CompartmentFuel order={order} />
+                  </div>
+
+                  <p className="text-xs text-gray-500 text-center">
+                    Review the fuel delivered in each compartment, then accept or reject this delivery.
+                  </p>
+
+                  {/* Optional rejection reason */}
+                  {rejecting && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2">
+                      <label className="block text-xs font-semibold text-red-700">
+                        Reason for rejection (optional)
+                      </label>
+                      <textarea
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        rows={2}
+                        placeholder="e.g. Volume short, wrong fuel type, contamination…"
+                        className="w-full text-sm border border-red-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-300 focus:outline-none resize-none"
+                      />
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  {!rejecting ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={() => setRejecting(true)}
+                        className="border border-red-300 text-red-700 font-bold py-3 rounded-xl text-sm hover:bg-red-50 transition"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        onClick={confirmDelivery}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm transition"
+                      >
+                        Accept Delivery
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={() => { setRejecting(false); setRejectReason(''); }}
+                        className="border border-gray-200 text-gray-600 font-semibold py-3 rounded-xl text-sm hover:bg-gray-50 transition"
+                      >
+                        Back
+                      </button>
+                      <button
+                        onClick={rejectDelivery}
+                        className="bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl text-sm transition"
+                      >
+                        Confirm Rejection
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

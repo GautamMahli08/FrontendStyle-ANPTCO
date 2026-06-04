@@ -81,7 +81,7 @@ export default function AdminTrucksPage() {
 
         <main className="p-8">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">All Trucks 🚛</h1>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">All Trucks</h1>
             <p className="text-gray-600">Monitor and manage all registered trucks across the platform</p>
           </div>
 

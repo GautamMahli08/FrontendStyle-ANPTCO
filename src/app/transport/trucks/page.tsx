@@ -10,11 +10,15 @@ import Header from '@/src/components/layout/Header';
 
 import StatusBadge from '@/src/components/workflow/StatusBadge';
 
+import ToggleSwitch from '@/src/components/ui/ToggleSwitch';
+
 import {
 
 getCurrentUser,
 
 getTrucks,
+
+updateTruck,
 
 } from '@/src/lib/demo-data';
 
@@ -124,6 +128,20 @@ myTrucks
 
 };
 
+// Enable / disable a truck
+const toggleTruck = (
+truck:any
+)=>{
+
+updateTruck(
+truck.id,
+{ disabled: !truck.disabled }
+);
+
+if(user) loadTrucks(user);
+
+};
+
 const handleRefresh = ()=>{
 
 if(user){
@@ -227,7 +245,7 @@ text-gray-900
 mb-2
 ">
 
-My Trucks 🚛
+My Trucks
 
 </h1>
 
@@ -455,16 +473,19 @@ trucks.map(
 
 <div
 key={truck.id}
-className="
+className={`
 bg-white
 rounded-xl
 p-6
 border-2
-border-gray-200
-hover:border-blue-300
 transition-all
 cursor-pointer
-"
+${
+truck.disabled
+? 'border-red-200 bg-red-50/40'
+: 'border-gray-200 hover:border-blue-300'
+}
+`}
 onClick={()=>{
 
 setSelectedTruck(
@@ -516,9 +537,27 @@ truck.sellerName
 
 </div>
 
+{
+truck.disabled
+?
+<span className="
+inline-flex
+items-center
+px-3
+py-1
+rounded-full
+text-xs
+font-medium
+bg-red-100
+text-red-800
+">
+🚫 Disabled
+</span>
+:
 <StatusBadge
 status={truck.status}
 />
+}
 
 </div>
 
@@ -629,6 +668,42 @@ Waiting for seller/admin approval before QR activation
 </div>
 
 }
+
+{/* Enable / disable toggle */}
+
+<div
+className="
+mt-4
+pt-3
+border-t
+flex
+items-center
+justify-between
+"
+onClick={(e)=>e.stopPropagation()}
+>
+
+<span className="
+text-xs
+font-medium
+text-gray-500
+">
+{
+truck.disabled
+? 'Truck disabled'
+: 'Truck active'
+}
+</span>
+
+<ToggleSwitch
+size="sm"
+enabled={!truck.disabled}
+onChange={()=>
+toggleTruck(truck)
+}
+/>
+
+</div>
 
 </div>
 

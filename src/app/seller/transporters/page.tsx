@@ -5,6 +5,7 @@ import { useEffect,useState } from 'react';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header from '@/src/components/layout/Header';
 import StatusBadge from '@/src/components/workflow/StatusBadge';
+import ToggleSwitch from '@/src/components/ui/ToggleSwitch';
 
 import {
 
@@ -13,6 +14,8 @@ getSellerConnections,
 getUsers,
 getTrucks,
 getOrders,
+updateTruck,
+updateSellerConnection,
 
 } from '@/src/lib/demo-data';
 
@@ -112,6 +115,16 @@ const activeTrucks =
 transporterTrucks.filter(
 (t:any)=>
 
+!t.disabled
+
+&&
+
+!connection.disabled
+
+&&
+
+(
+
 t.status ===
 'ACTIVE'
 
@@ -124,6 +137,7 @@ t.status ===
 
 t.status ===
 'IDLE'
+)
 );
 
 const activeOrders =
@@ -146,6 +160,9 @@ return {
 
 connectionId:
 connection.id,
+
+disabled:
+connection.disabled === true,
 
 connectedAt:
 connection.approvedAt,
@@ -170,6 +187,36 @@ transporterTrucks,
 setTransporters(
 transporterData
 );
+
+};
+
+// ── Enable / disable a whole transporter partnership ──
+
+const toggleTransporter = (
+transporter:any
+)=>{
+
+updateSellerConnection(
+transporter.connectionId,
+{ disabled: !transporter.disabled }
+);
+
+if(user) loadTransporters(user);
+
+};
+
+// ── Enable / disable a single truck ──
+
+const toggleTruck = (
+truck:any
+)=>{
+
+updateTruck(
+truck.id,
+{ disabled: !truck.disabled }
+);
+
+if(user) loadTransporters(user);
 
 };
 
@@ -224,7 +271,7 @@ text-gray-900
 mb-2
 ">
 
-Connected Transporters 🚛
+Connected Transporters
 
 </h1>
 
@@ -448,14 +495,19 @@ transporters.map(
 
 <div
 key={transporter.id}
-className="
+className={`
 bg-white
 rounded-xl
 border
 p-6
 hover:shadow-lg
 transition-shadow
-"
+${
+transporter.disabled
+? 'border-red-200 bg-red-50/40'
+: ''
+}
+`}
 >
 
 {/* Header */}
@@ -496,9 +548,36 @@ transporter.email
 
 </div>
 
-<StatusBadge
-status="APPROVED"
+<div className="
+flex
+items-center
+gap-2.5
+">
+
+<span className={`
+text-sm
+font-semibold
+${
+transporter.disabled
+? 'text-red-600'
+: 'text-emerald-600'
+}
+`}>
+{
+transporter.disabled
+? 'Disabled'
+: 'Active'
+}
+</span>
+
+<ToggleSwitch
+enabled={!transporter.disabled}
+onChange={()=>
+toggleTransporter(transporter)
+}
 />
+
+</div>
 
 </div>
 
@@ -647,11 +726,16 @@ transporter.fleet.map(
 
 <div
 key={truck.id}
-className="
+className={`
 border
 rounded-lg
 p-3
-"
+${
+truck.disabled
+? 'border-red-200 bg-red-50/40'
+: ''
+}
+`}
 >
 
 <div className="
@@ -686,9 +770,27 @@ truck.truckType
 
 </div>
 
+{
+truck.disabled
+?
+<span className="
+inline-flex
+items-center
+px-3
+py-1
+rounded-full
+text-xs
+font-medium
+bg-red-100
+text-red-800
+">
+🚫 Disabled
+</span>
+:
 <StatusBadge
 status={truck.status}
 />
+}
 
 </div>
 
@@ -750,6 +852,41 @@ truck.qrCode
 }
 
 </div>
+
+</div>
+
+{/* Truck enable / disable toggle */}
+
+<div className="
+mt-3
+pt-2
+border-t
+flex
+items-center
+justify-between
+">
+
+<span className="
+text-xs
+text-gray-400
+">
+{
+transporter.disabled
+? 'Transporter disabled'
+: truck.disabled
+? 'Truck disabled'
+: 'Truck active'
+}
+</span>
+
+<ToggleSwitch
+size="sm"
+enabled={!truck.disabled && !transporter.disabled}
+disabled={transporter.disabled}
+onChange={()=>
+toggleTruck(truck)
+}
+/>
 
 </div>
 

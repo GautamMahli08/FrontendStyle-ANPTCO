@@ -133,7 +133,7 @@ export default function DriverDashboard() {
         <main className="p-8">
           {/* Welcome Banner */}
           <div className="bg-gradient-to-r from-green-600 to-teal-700 rounded-xl p-8 mb-8 text-white">
-            <h1 className="text-3xl font-bold mb-2">Welcome, {user.firstName}! 🚛</h1>
+            <h1 className="text-3xl font-bold mb-2">Welcome, {user.firstName}!</h1>
             <p className="text-green-100">Your delivery dashboard</p>
           </div>
 
@@ -273,24 +273,24 @@ No truck assigned
 <button
 className="bg-blue-100 p-3 rounded"
 >
-📍 Open Map
+Open Map
 </button>
 
 <button
 className="bg-green-100 p-3 rounded"
 >
-📷 Show QR
+Show QR
 </button>
 
 <button
 className="bg-orange-100 p-3 rounded"
 >
-⛽ Start Unloading
+Start Unloading
 </button>
 
 </div>
                 <div>
-                  <h2 className="text-2xl font-bold text-gray-900 mb-2">🚨 Active Delivery</h2>
+                  <h2 className="text-2xl font-bold text-gray-900 mb-2">Active Delivery</h2>
                   <p className="text-gray-600">Order #{shortOrderId(activeDelivery.id)}</p>
                 </div>
                 <StatusBadge status={activeDelivery.status} />
@@ -313,7 +313,7 @@ className="bg-orange-100 p-3 rounded"
 
               <div className="bg-blue-50 rounded-lg p-4 mb-6">
                 <p className="text-sm text-blue-800">
-                  📍 <strong>Delivery Address:</strong> {activeDelivery.destinationAddress}
+                  <strong>Delivery Address:</strong> {activeDelivery.destinationAddress}
                 </p>
               </div>
 
@@ -321,7 +321,7 @@ className="bg-orange-100 p-3 rounded"
                 onClick={handleStartDelivery}
                 className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 rounded-lg transition-colors text-lg animate-pulse"
               >
-                🚛 Continue Delivery →
+                Continue Delivery
               </button>
             </div>
           ) : (
@@ -355,8 +355,8 @@ className="bg-orange-100 p-3 rounded"
                     </div>
 
                     <div className="flex items-center gap-4 text-sm text-gray-600">
-                      <span>📅 Completed: {delivery.completedAt?.toLocaleDateString()}</span>
-                      <span>⏱️ {delivery.completedAt?.toLocaleTimeString()}</span>
+                      <span>Completed: {delivery.completedAt?.toLocaleDateString()}</span>
+                      <span>{delivery.completedAt?.toLocaleTimeString()}</span>
                     </div>
                   </div>
                 ))}

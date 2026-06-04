@@ -192,7 +192,7 @@ export default function AdminTicketsPage() {
 
         <main className="p-8">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Support Tickets 🎫</h1>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Support Tickets</h1>
             <p className="text-gray-600">Manage support requests from all users</p>
           </div>
 

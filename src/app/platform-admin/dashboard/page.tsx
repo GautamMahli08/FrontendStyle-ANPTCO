@@ -106,7 +106,7 @@ export default function PlatformAdminDashboard() {
                   onClick={() => router.push('/platform-admin/sensor-integration')}
                   className="bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
                 >
-                  Process Integration Requests →
+                  Process Integration Requests
                 </button>
               </div>
             </div>

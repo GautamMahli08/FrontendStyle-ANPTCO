@@ -580,9 +580,12 @@ export const getOrders = (): Order[] => {
     scheduledDeliveryTime: order.scheduledDeliveryTime ? new Date(order.scheduledDeliveryTime) : undefined,
     acceptedAt:            order.acceptedAt            ? new Date(order.acceptedAt)            : undefined,
     completedAt:           order.completedAt           ? new Date(order.completedAt)           : undefined,
+    loadStartedAt:         order.loadStartedAt         ? new Date(order.loadStartedAt)         : undefined,
+    loadedAt:              order.loadedAt              ? new Date(order.loadedAt)              : undefined,
     tripStartedAt:         order.tripStartedAt         ? new Date(order.tripStartedAt)         : undefined,
     arrivedAt:             order.arrivedAt             ? new Date(order.arrivedAt)             : undefined,
     cancelledAt:           order.cancelledAt           ? new Date(order.cancelledAt)           : undefined,
+    rejectedAt:            order.rejectedAt            ? new Date(order.rejectedAt)            : undefined,
     assignedAt:            order.assignedAt            ? new Date(order.assignedAt)            : undefined,
   }));
 };
@@ -837,7 +840,7 @@ export type OrderEvent = {
 };
 
 const ORDER_STATUS_SEQUENCE = [
-  'PLACED', 'ACCEPTED_BY_SELLER', 'ASSIGNED_TO_TSP', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED', 'COMPLETED',
+  'PLACED', 'ACCEPTED_BY_SELLER', 'ASSIGNED_TO_TSP', 'ASSIGNED', 'LOADING', 'LOADED', 'EN_ROUTE', 'ARRIVED', 'COMPLETED',
 ];
 
 /**
@@ -855,9 +858,10 @@ export function getOrderTimeline(order: any, anomalies?: FuelAnomaly[]): OrderEv
     { seq: 1, key: 'accepted', icon: '✅', label: 'Accepted by seller',     at: toDate(order.acceptedAt),                                 tone: 'default' },
     { seq: 2, key: 'tsp',      icon: '🏢', label: 'Assigned to transporter', at: toDate(order.assignedToTspAt),                            tone: 'default' },
     { seq: 3, key: 'truck',    icon: '🚛', label: 'Truck assigned',         detail: [order.assignedTruckRegistration, order.assignedDriverName].filter(Boolean).join(' · '), at: toDate(order.truckAssignedAt), tone: 'default' },
-    { seq: 4, key: 'enroute',  icon: '🚦', label: 'Journey started',        detail: 'Left ANPTCO depot', at: toDate(order.tripStartedAt),  tone: 'active' },
-    { seq: 5, key: 'arrived',  icon: '📍', label: 'Arrived at station',     detail: order.destinationName, at: toDate(order.arrivedAt),    tone: 'active' },
-    { seq: 6, key: 'done',     icon: '🔒', label: 'Delivery completed',     detail: 'QR verified', at: toDate(order.completedAt),          tone: 'success' },
+    { seq: 5, key: 'loaded',   icon: '🛢️', label: 'Fuel loaded',            detail: 'Compartments filled at depot', at: toDate(order.loadedAt),    tone: 'default' },
+    { seq: 6, key: 'enroute',  icon: '🚦', label: 'Journey started',        detail: 'Left ANPTCO depot', at: toDate(order.tripStartedAt),  tone: 'active' },
+    { seq: 7, key: 'arrived',  icon: '📍', label: 'Arrived at station',     detail: order.destinationName, at: toDate(order.arrivedAt),    tone: 'active' },
+    { seq: 8, key: 'done',     icon: '🔒', label: 'Delivery completed',     detail: 'QR verified', at: toDate(order.completedAt),          tone: 'success' },
   ];
 
   const events: OrderEvent[] = [];
@@ -929,6 +933,25 @@ export function destinationCoords(order: any): { lat: number; lng: number } {
   return zone ? { lat: zone.lat, lng: zone.lng } : { lat: FIXED_DEPOT.lat, lng: FIXED_DEPOT.lng };
 }
 
+/**
+ * Flip any LOADING order whose fill window has elapsed to LOADED (compartments
+ * full, truck ready to depart). Mirrors advanceJourneys — call it on the same poll.
+ */
+export function advanceLoading(): boolean {
+  let changed = false;
+  getOrders().forEach((o: any) => {
+    if (
+      o.status === 'LOADING' && o.loadStartedAt &&
+      Date.now() - new Date(o.loadStartedAt).getTime() >= LOADING_DURATION_MS
+    ) {
+      updateOrder(o.id, { status: 'LOADED', loadedAt: new Date() });
+      if (o.assignedTruckId) updateTruck(o.assignedTruckId, { status: 'LOADED' });
+      changed = true;
+    }
+  });
+  return changed;
+}
+
 /** Flip any EN_ROUTE order whose journey has elapsed to ARRIVED (truck reached the station). */
 export function advanceJourneys(): boolean {
   let changed = false;
@@ -955,39 +978,90 @@ export function advanceJourneys(): boolean {
   return changed;
 }
 
+
+// ── Compartment fuel telemetry (flespi-style) ────────────────
+// In production, per-compartment fuel levels arrive from the Galileosky sensors
+// through a flespi MQTT/webhook push — a discrete reading every few seconds, NOT
+// a continuous stream. We mirror that here: the UI samples a derived reading
+// every TELEMETRY_INTERVAL_MS and animates smoothly between samples (CSS), so the
+// component already behaves the way it will once wired to the real feed.
+export const TELEMETRY_INTERVAL_MS = 2_000;   // simulated flespi push cadence
+export const LOADING_DURATION_MS   = 8_000;   // depot fill time (compartments filling)
+export const OFFLOAD_DURATION_MS   = 10_000;  // station drain time (offloading)
+
+export type FuelPhase = 'EMPTY' | 'LOADING' | 'LOADED' | 'IN_TRANSIT' | 'OFFLOADING' | 'DELIVERED';
+
+export interface CompartmentReading {
+  index:    number;
+  fuelType: string | null;  // null = compartment not used by this order
+  capacity: number;
+  volume:   number;         // current litres (derived from phase + elapsed time)
+}
+
 /**
- * Seller assigns a transporter → a truck for that transporter immediately leaves the
- * depot and starts the journey to the destination (status EN_ROUTE, tripStartedAt = now).
- * Falls back to the manual TSP flow (ASSIGNED_TO_TSP) only if the transporter has no truck.
+ * Maps an order onto the truck's 4 fixed compartments in whole-compartment units
+ * (each fuel item is a multiple of 9,100 L). Unused compartments are returned empty.
  */
-export function assignTransporterAndDispatch(orderId: string, tspId: string): { dispatched: boolean } {
-  const order: any = getOrders().find(o => o.id === orderId);
-  const tsp: any = getUsers().find(u => u.id === tspId);
-  if (!order || !tsp) return { dispatched: false };
-
-  const tspTrucks = getTrucks().filter((t: any) => t.tspId === tspId);
-  const truck: any = tspTrucks.find((t: any) => t.status === 'IDLE' || t.status === 'ACTIVE') ?? tspTrucks[0];
-
-  if (truck) {
-    const driver: any = getDrivers().find((d: any) => d.tspId === tspId);
-    const now = new Date();
-    updateOrder(orderId, {
-      status:                    'EN_ROUTE',
-      assignedTSPId:             tspId,
-      assignedTruckId:           truck.id,
-      assignedTruckRegistration: truck.registrationNumber,
-      assignedDriverId:          driver?.id ?? '',
-      assignedDriverName:        driver ? `${driver.firstName} ${driver.lastName}` : 'Driver',
-      assignedToTspAt:           now,
-      truckAssignedAt:           now,
-      tripStartedAt:             now,
-    });
-    updateTruck(truck.id, { status: 'EN_ROUTE' });
-    return { dispatched: true };
+export function orderCompartmentPlan(order: any): { index: number; fuelType: string | null; capacity: number }[] {
+  const plan: { index: number; fuelType: string | null; capacity: number }[] = [];
+  let idx = 1;
+  orderFuelBreakdown(order).forEach(({ fuelType, volume }) => {
+    const comps = Math.max(0, Math.round(volume / COMPARTMENT_CAPACITY));
+    for (let i = 0; i < comps && idx <= COMPARTMENTS_PER_TRUCK; i++) {
+      plan.push({ index: idx++, fuelType, capacity: COMPARTMENT_CAPACITY });
+    }
+  });
+  while (idx <= COMPARTMENTS_PER_TRUCK) {
+    plan.push({ index: idx++, fuelType: null, capacity: COMPARTMENT_CAPACITY });
   }
+  return plan;
+}
 
-  updateOrder(orderId, { status: 'ASSIGNED_TO_TSP', assignedTSPId: tspId, assignedToTspAt: new Date() });
-  return { dispatched: false };
+/**
+ * Phase + 0→1 fill factor of the loaded compartments for an order at time `now`.
+ * Loading ramps up over LOADING_DURATION_MS once the journey starts; offloading
+ * ramps down over OFFLOAD_DURATION_MS once the client confirms delivery (QR scan).
+ */
+export function orderFuelPhase(order: any, now = Date.now()): { phase: FuelPhase; fill: number } {
+  if (!order) return { phase: 'EMPTY', fill: 0 };
+
+  if (order.status === 'COMPLETED') {
+    const start = order.completedAt ? new Date(order.completedAt).getTime() : 0;
+    const t = start ? (now - start) / OFFLOAD_DURATION_MS : 1;
+    return t >= 1 ? { phase: 'DELIVERED', fill: 0 } : { phase: 'OFFLOADING', fill: Math.max(0, 1 - t) };
+  }
+  // Loading is its own step now: the transporter triggers it (loadStartedAt) before
+  // the journey starts. Tanks ramp up over LOADING_DURATION_MS, then sit full.
+  if (order.status === 'LOADING') {
+    const start = order.loadStartedAt ? new Date(order.loadStartedAt).getTime() : 0;
+    const t = start ? (now - start) / LOADING_DURATION_MS : 1;
+    return t < 1 ? { phase: 'LOADING', fill: Math.max(0, Math.min(1, t)) } : { phase: 'LOADED', fill: 1 };
+  }
+  if (order.status === 'LOADED') return { phase: 'LOADED', fill: 1 };
+  if (order.status === 'EN_ROUTE' || order.status === 'ARRIVED') return { phase: 'IN_TRANSIT', fill: 1 };
+
+  // PLACED / ACCEPTED / ASSIGNED_TO_TSP / ASSIGNED / CANCELLED → not yet loaded
+  return { phase: 'EMPTY', fill: 0 };
+}
+
+/** Full derived telemetry snapshot for an order's truck at time `now`. */
+export function orderFuelTelemetry(order: any, now = Date.now()): {
+  phase: FuelPhase;
+  readings: CompartmentReading[];
+  totalVolume: number;
+  totalCapacity: number;
+} {
+  const { phase, fill } = orderFuelPhase(order, now);
+  const readings: CompartmentReading[] = orderCompartmentPlan(order).map(c => ({
+    ...c,
+    volume: c.fuelType ? Math.round(c.capacity * fill) : 0,
+  }));
+  return {
+    phase,
+    readings,
+    totalVolume:   readings.reduce((s, r) => s + r.volume, 0),
+    totalCapacity: readings.reduce((s, r) => s + r.capacity, 0),
+  };
 }
 
 // ── Driver helpers ────────────────────────────────────────────

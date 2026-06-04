@@ -664,7 +664,7 @@ text-sm
 "
 >
 
-Review Document →
+Review Document
 
 </button>
 
@@ -980,7 +980,7 @@ font-medium
 "
 >
 
-View Document →
+View Document
 
 </a>
 

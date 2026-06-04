@@ -72,7 +72,7 @@ export default function SellerTrucksPage() {
         
         <main className="p-8">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">All Trucks 🚛</h1>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">All Trucks</h1>
             <p className="text-gray-600">View and manage all registered trucks across transport providers</p>
           </div>
 

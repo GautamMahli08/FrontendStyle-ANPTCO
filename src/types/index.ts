@@ -8,9 +8,12 @@ export type OrderStatus =
   | 'ASSIGNED_TO_TSP'
   | 'ASSIGNED'
   | 'TRUCKS_ASSIGNED'
+  | 'LOADING'
+  | 'LOADED'
   | 'EN_ROUTE'
   | 'ARRIVED'
   | 'DELIVERY_ACCEPTED'
+  | 'DELIVERY_REJECTED'
   | 'OFFLOADING_IN_PROGRESS'
   | 'OFFLOADING_COMPLETE'
   | 'COMPLETED'
@@ -20,6 +23,8 @@ export type TruckStatus =
   | 'PENDING_INTEGRATION'
   | 'IDLE'
   | 'ASSIGNED'
+  | 'LOADING'
+  | 'LOADED'
   | 'EN_ROUTE'
   | 'ARRIVED'
   | 'OFFLOADING'
@@ -135,6 +140,9 @@ export interface Truck {
 
   activatedAt?: Date;
 
+  // Seller manager can disable an individual truck
+  disabled?: boolean;
+
   createdAt?: Date;
 }
 
@@ -235,10 +243,14 @@ export interface Order {
   assignedAt?:      Date;
   assignedToTspAt?: Date;
   truckAssignedAt?: Date;
+  loadStartedAt?:   Date;
+  loadedAt?:        Date;
   tripStartedAt?:   Date;
   arrivedAt?:     Date;
   completedAt?:   Date;
   cancelledAt?:   Date;
+  rejectedAt?:    Date;
+  rejectionReason?: string;
   updatedAt?:     Date;
   acceptedAt?:    Date;
   scheduledDeliveryTime?: Date;
@@ -427,6 +439,9 @@ approvedAt?:Date;
 
 notes?:string;
 
+// Seller manager can disable the whole transporter partnership
+disabled?:boolean;
+
 }
 
 export interface SellerOnboarding {
@@ -477,6 +492,9 @@ export interface Driver {
     | 'OFF_DUTY';
 
   role?: 'DRIVER';
+
+  // TSP can disable a driver
+  disabled?: boolean;
 
   createdAt?: Date;
 }

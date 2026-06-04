@@ -166,7 +166,7 @@ export default function ClientDashboard() {
                 onClick={() => router.push('/client/delivery/scan-qr')}
                 className="bg-teal-600 hover:bg-teal-700 text-white font-black px-5 py-2.5 rounded-xl text-sm transition flex-shrink-0"
               >
-                Scan QR →
+                Scan QR
               </button>
             </div>
           )}
@@ -323,7 +323,7 @@ export default function ClientDashboard() {
               <h2 className="font-bold text-gray-900 text-sm uppercase tracking-wide">Active Orders</h2>
               {orders.length > 0 && (
                 <button onClick={() => router.push('/client/orders')} className="text-xs text-blue-600 hover:text-blue-800 font-semibold transition">
-                  View all →
+                  View all
                 </button>
               )}
             </div>
@@ -364,8 +364,8 @@ export default function ClientDashboard() {
 
                       {order.assignedTruckRegistration && (
                         <div className="mt-2.5 flex items-center gap-3 text-xs text-gray-400 border-t border-gray-100 pt-2.5">
-                          <span>🚛 {order.assignedTruckRegistration}</span>
-                          {order.assignedDriverName && <span>· 👤 {order.assignedDriverName}</span>}
+                          <span>{order.assignedTruckRegistration}</span>
+                          {order.assignedDriverName && <span>· {order.assignedDriverName}</span>}
                         </div>
                       )}
 

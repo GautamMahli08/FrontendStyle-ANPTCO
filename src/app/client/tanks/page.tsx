@@ -420,7 +420,7 @@ export default function ClientTanksPage() {
           {/* Title row */}
           <div className="mb-8 flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-1">Fuel Tanks 🛢️</h1>
+              <h1 className="text-3xl font-bold text-gray-900 mb-1">Fuel Tanks</h1>
               <p className="text-gray-500">Monitor inventory levels and reorder smartly</p>
             </div>
             <div className="flex gap-3">

@@ -145,7 +145,7 @@ export default function RegisterTruckPage() {
 
         <main className="p-8">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Register New Truck 🚛</h1>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Register New Truck</h1>
             <p className="text-gray-600">Add a truck to your fleet</p>
           </div>
 

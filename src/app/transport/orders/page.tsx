@@ -2,28 +2,24 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import dynamic from 'next/dynamic';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
 import {
   getCurrentUser, getOrders, getTrucks, getDrivers,
-  updateOrder, updateTruck, updateDriver, addNotification,
+  updateOrder, updateTruck, addNotification,
   addFuelAnomaly, orderFuelBreakdown, shortOrderId,
-  advanceJourneys, destinationCoords, FIXED_DEPOT, JOURNEY_DURATION_MS,
+  advanceJourneys, advanceLoading,
 } from '@/src/lib/demo-data';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
 import OrderTimeline from '@/src/components/orders/OrderTimeline';
+import CompartmentFuel from '@/src/components/fleet/CompartmentFuel';
+import CopyId from '@/src/components/ui/CopyId';
 
-// Leaflet touches `window`, so load the live map only on the client.
-const LiveTrackingMap = dynamic(() => import('@/src/components/maps/LiveTrackingMap'), {
-  ssr: false,
-  loading: () => <div className="w-full h-[380px] flex items-center justify-center text-sm text-gray-400">Loading map…</div>,
-});
-
-// Status helpers
 const STATUS_LABEL: Record<string, string> = {
   ASSIGNED_TO_TSP: 'Needs Truck',
   ASSIGNED:        'Truck Assigned',
+  LOADING:         'Loading Fuel',
+  LOADED:          'Loaded',
   EN_ROUTE:        'En Route',
   ARRIVED:         'Arrived',
   COMPLETED:       'Delivered',
@@ -32,11 +28,20 @@ const STATUS_LABEL: Record<string, string> = {
 const STATUS_COLOR: Record<string, string> = {
   ASSIGNED_TO_TSP: 'bg-yellow-100 text-yellow-700',
   ASSIGNED:        'bg-indigo-100 text-indigo-700',
-  EN_ROUTE:        'bg-blue-100 text-blue-700',
-  ARRIVED:         'bg-teal-100 text-teal-700',
+  LOADING:         'bg-cyan-100   text-cyan-700',
+  LOADED:          'bg-sky-100    text-sky-700',
+  EN_ROUTE:        'bg-blue-100   text-blue-700',
+  ARRIVED:         'bg-teal-100   text-teal-700',
   COMPLETED:       'bg-emerald-100 text-emerald-700',
-  CANCELLED:       'bg-red-100 text-red-700',
+  CANCELLED:       'bg-red-100    text-red-700',
 };
+
+function fuelSummary(order: any): string {
+  if (order.fuelItems?.length > 1) {
+    return order.fuelItems.map((f: any) => `${f.volume.toLocaleString()}L ${f.fuelType}`).join(' + ');
+  }
+  return `${order.volume?.toLocaleString()}L ${order.fuelType}`;
+}
 
 export default function TransportOrdersPage() {
   const router = useRouter();
@@ -45,22 +50,19 @@ export default function TransportOrdersPage() {
   const [trucks,         setTrucks]         = useState<any[]>([]);
   const [drivers,        setDrivers]        = useState<any[]>([]);
   const [mounted,        setMounted]        = useState(false);
-  const [assigning,      setAssigning]      = useState<any>(null);   // order being assigned
+  const [detailId,       setDetailId]       = useState<string | null>(null);
+  const [assigning,      setAssigning]      = useState<any>(null);   // order being assigned a truck (modal)
   const [selectedTruck,  setSelectedTruck]  = useState('');
   const [journeyLoading, setJourneyLoading] = useState<string | null>(null);
-  const [timelineId,     setTimelineId]     = useState<string | null>(null);
 
   const loadData = useCallback((u: any) => {
-    const allOrders  = getOrders();
-    const allTrucks  = getTrucks();
-    const allDrivers = getDrivers();
     setOrders(
-      allOrders
+      getOrders()
         .filter((o: any) => o.assignedTSPId === u.id)
         .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     );
-    setTrucks(allTrucks.filter((t: any) => t.tspId === u.id));
-    setDrivers(allDrivers.filter((d: any) => d.tspId === u.id));
+    setTrucks(getTrucks().filter((t: any) => t.tspId === u.id));
+    setDrivers(getDrivers().filter((d: any) => d.tspId === u.id));
   }, []);
 
   useEffect(() => {
@@ -69,8 +71,8 @@ export default function TransportOrdersPage() {
     if (!u || u.role !== 'TRANSPORT_ADMIN') { router.push('/'); return; }
     setUser(u);
     loadData(u);
-    // Keep the live map moving and flip trucks to ARRIVED once they reach the station.
-    const iv = setInterval(() => { advanceJourneys(); loadData(u); }, 3000);
+    // Keep statuses fresh: finish loading (LOADING→LOADED) and arrive (EN_ROUTE→ARRIVED).
+    const iv = setInterval(() => { advanceLoading(); advanceJourneys(); loadData(u); }, 3000);
     return () => clearInterval(iv);
   }, [router, loadData]);
 
@@ -79,7 +81,7 @@ export default function TransportOrdersPage() {
   // ── Assign truck to order ─────────────────────────────────
   const handleAssignTruck = () => {
     if (!selectedTruck || !assigning) return;
-    const truck  = trucks.find((t: any) => t.id === selectedTruck);
+    const truck = trucks.find((t: any) => t.id === selectedTruck);
     if (!truck) return;
 
     // No capacity check needed — every truck is a fixed 4 × 9,100 L layout and
@@ -87,13 +89,13 @@ export default function TransportOrdersPage() {
     const driver = drivers.find((d: any) => d.id === truck.assignedDriverId);
 
     updateOrder(assigning.id, {
-      status:                  'ASSIGNED',
-      assignedTruckId:         truck.id,
+      status:                    'ASSIGNED',
+      assignedTruckId:           truck.id,
       assignedTruckRegistration: truck.registrationNumber,
-      assignedDriverId:        driver?.id   ?? '',
-      assignedDriverName:      driver ? `${driver.firstName} ${driver.lastName}` : 'Driver TBD',
-      assignedDriverPhone:     driver?.phone ?? '',
-      truckAssignedAt:         new Date(),
+      assignedDriverId:          driver?.id   ?? '',
+      assignedDriverName:        driver ? `${driver.firstName} ${driver.lastName}` : 'Driver TBD',
+      assignedDriverPhone:       driver?.phone ?? '',
+      truckAssignedAt:           new Date(),
     });
     updateTruck(truck.id, { status: 'ASSIGNED' });
     logDemoEvent(user.id, 'TRUCK_ASSIGNED', `orderId=${assigning.id} | truck=${truck.registrationNumber} | driver=${driver?.firstName ?? 'TBD'} | clientId=${assigning.clientId}`);
@@ -101,12 +103,29 @@ export default function TransportOrdersPage() {
     addNotification({
       id: `notif-${Date.now()}`, userId: assigning.clientId ?? '',
       type: 'TRUCK_ASSIGNED', title: '🚛 Truck Assigned',
-      message: `Truck ${truck.registrationNumber} assigned to your order. Journey starts soon.`,
+      message: `Truck ${truck.registrationNumber} assigned to your order. Loading will begin shortly.`,
       read: false, createdAt: new Date(),
     });
 
     setAssigning(null);
     setSelectedTruck('');
+    loadData(user);
+  };
+
+  // ── Load fuel (compartments fill at the depot) ───────────
+  const handleLoadFuel = (order: any) => {
+    updateOrder(order.id, { status: 'LOADING', loadStartedAt: new Date() });
+    if (order.assignedTruckId) updateTruck(order.assignedTruckId, { status: 'LOADING' });
+    logDemoEvent(user.id, 'FUEL_LOADING', `orderId=${order.id} | truck=${order.assignedTruckRegistration} | ${order.volume?.toLocaleString()}L`);
+    addNotification({
+      id: `notif-${Date.now()}`, userId: order.clientId ?? '',
+      type: 'FUEL_LOADING', title: '🛢️ Loading Fuel',
+      message: `Your truck (${order.assignedTruckRegistration}) is being loaded at the ANPTCO depot.`,
+      read: false, createdAt: new Date(),
+    });
+    // Open this order's detail so the TSP can watch the compartments fill live,
+    // right here on the orders page (Start journey appears when loading finishes).
+    setDetailId(order.id);
     loadData(user);
   };
 
@@ -138,7 +157,6 @@ export default function TransportOrdersPage() {
           severity:       'HIGH',
           status:         'OPEN',
         });
-        // Notify seller
         addNotification({
           id: `notif-theft-${Date.now()}`, userId: 'seller-001',
           type: 'FUEL_ANOMALY', title: '🚨 Fuel Anomaly Detected',
@@ -148,34 +166,19 @@ export default function TransportOrdersPage() {
       }, 3000);
     }
 
-    setTimeout(() => { setJourneyLoading(null); loadData(user); }, 500);
+    // Hand off to the Fleet Monitor focused on this order so the TSP can watch
+    // the truck drive to the station live.
+    setTimeout(() => {
+      setJourneyLoading(null);
+      router.push(`/transport/fleet-monitor?order=${order.id}`);
+    }, 500);
   };
 
-  // Trucks now reach the station on their own (advanceJourneys flips EN_ROUTE → ARRIVED
-  // once the journey timer elapses), so there is no manual "Mark as Arrived" step.
+  const idleTrucks = trucks.filter((t: any) => ['IDLE', 'ACTIVE'].includes(t.status));
 
-  // ── Pipeline buckets ──────────────────────────────────────
-  const needsTruck  = orders.filter((o: any) => o.status === 'ASSIGNED_TO_TSP');
-  const inProgress  = orders.filter((o: any) => ['ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(o.status));
-  const completed   = orders.filter((o: any) => ['COMPLETED', 'CANCELLED'].includes(o.status));
-
-  const idleTrucks  = trucks.filter((t: any) => ['IDLE', 'ACTIVE'].includes(t.status));
-
-  // Live journeys for the map — same shape the seller's Fleet Monitor uses.
-  const activeJourneys = orders
-    .filter((o: any) => ['EN_ROUTE', 'ARRIVED'].includes(o.status) && o.assignedTruckId)
-    .map((o: any) => {
-      const dest = destinationCoords(o);
-      return {
-        id:         o.id,
-        truckReg:   o.assignedTruckRegistration || 'Truck',
-        status:     o.status,
-        depot:      { lat: FIXED_DEPOT.lat, lng: FIXED_DEPOT.lng, name: FIXED_DEPOT.name },
-        dest:       { lat: dest.lat, lng: dest.lng, name: o.destinationName || 'Destination' },
-        startedAt:  o.tripStartedAt ? new Date(o.tripStartedAt).getTime() : Date.now(),
-        durationMs: JOURNEY_DURATION_MS,
-      };
-    });
+  const needsTruck = orders.filter((o: any) => o.status === 'ASSIGNED_TO_TSP').length;
+  const active     = orders.filter((o: any) => ['ASSIGNED', 'LOADING', 'LOADED', 'EN_ROUTE', 'ARRIVED'].includes(o.status)).length;
+  const completed  = orders.filter((o: any) => o.status === 'COMPLETED').length;
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -190,156 +193,158 @@ export default function TransportOrdersPage() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-black text-gray-900">Orders</h1>
-              <p className="text-sm text-gray-500 mt-0.5">{user.companyName} · {orders.length} total assigned</p>
+              <p className="text-sm text-gray-500 mt-0.5">{user.companyName} · open an order to act on it or track its truck</p>
             </div>
-            <button onClick={() => loadData(user)} className="text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 transition">
-              Refresh
-            </button>
           </div>
 
-          {/* ── LIVE JOURNEY MAP ── */}
-          {activeJourneys.length > 0 && (
-            <section className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                <div>
-                  <h2 className="font-bold text-gray-900">Live Delivery Tracking</h2>
-                  <p className="text-xs text-gray-500 mt-0.5">Your trucks en route from the ANPTCO depot to client stations</p>
-                </div>
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
-                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                  {activeJourneys.length} active
-                </span>
+          {/* KPI strip */}
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: 'Total',      value: orders.length, color: 'text-slate-700',   bg: 'bg-slate-50',   border: 'border-slate-200' },
+              { label: 'Needs Truck',value: needsTruck,    color: 'text-yellow-600',  bg: 'bg-yellow-50',  border: 'border-yellow-200' },
+              { label: 'In Progress',value: active,        color: 'text-blue-600',    bg: 'bg-blue-50',    border: 'border-blue-200'   },
+              { label: 'Completed',  value: completed,     color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200'},
+            ].map(k => (
+              <div key={k.label} className={`${k.bg} border ${k.border} rounded-2xl px-4 py-3 text-center`}>
+                <p className={`text-2xl font-black ${k.color}`}>{k.value}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{k.label}</p>
               </div>
-              <LiveTrackingMap journeys={activeJourneys} className="w-full h-[380px]" />
-            </section>
-          )}
+            ))}
+          </div>
 
-          {/* ── NEEDS TRUCK ASSIGNMENT ── */}
-          {needsTruck.length > 0 && (
-            <section>
-              <SectionTitle icon="🟡" label="Needs Truck Assignment" count={needsTruck.length} />
-              <div className="grid md:grid-cols-2 gap-4 mt-3">
-                {needsTruck.map((order: any) => (
-                  <OrderCard key={order.id} order={order}>
-                    <button
-                      onClick={() => { setAssigning(order); setSelectedTruck(''); }}
-                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-xl transition text-sm"
-                    >
-                      🚛 Assign Truck
-                    </button>
-                  </OrderCard>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* ── IN PROGRESS ── */}
-          {inProgress.length > 0 && (
-            <section>
-              <SectionTitle icon="🔵" label="Active Deliveries" count={inProgress.length} />
-              <div className="space-y-4 mt-3">
-                {inProgress.map((order: any) => (
-                  <div key={order.id} className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-                    <div className="flex items-start justify-between gap-4 mb-4">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <p className="font-bold text-gray-900">Order #{shortOrderId(order.id)}</p>
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                            {STATUS_LABEL[order.status] ?? order.status}
-                          </span>
-                          {order.clientId === 'client-002' && order.status === 'EN_ROUTE' && (
-                            <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded-full animate-pulse">
-                              🚨 Theft Alert Active
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-500">{order.volume?.toLocaleString()}L {order.fuelType} → {order.destinationName}</p>
-                      </div>
-                    </div>
-
-                    {/* Truck + driver */}
-                    {order.assignedTruckRegistration && (
-                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 mb-4 flex items-center gap-3">
-                        <span className="text-2xl">🚛</span>
-                        <div>
-                          <p className="font-semibold text-gray-900 text-sm">{order.assignedTruckRegistration}</p>
-                          <p className="text-xs text-gray-500">{order.assignedDriverName} · QR: <span className="font-mono text-blue-600">{trucks.find(t => t.id === order.assignedTruckId)?.qrCode ?? '—'}</span></p>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Journey progress bar */}
-                    <JourneyProgress status={order.status} />
-
-                    {/* Action buttons */}
-                    <div className="flex gap-3 mt-4">
-                      {order.status === 'ASSIGNED' && (
-                        <button
-                          onClick={() => handleStartJourney(order)}
-                          disabled={journeyLoading === order.id}
-                          className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-xl transition text-sm"
-                        >
-                          {journeyLoading === order.id ? 'Starting…' : '🚦 Start Journey'}
-                        </button>
-                      )}
-                      {order.status === 'EN_ROUTE' && (
-                        <div className="flex-1 bg-blue-50 border border-blue-200 rounded-xl py-2.5 text-center text-sm font-semibold text-blue-700 flex items-center justify-center gap-2">
-                          <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
-                          En route — tracking live on the map above
-                        </div>
-                      )}
-                      {order.status === 'ARRIVED' && (
-                        <div className="flex-1 bg-teal-50 border border-teal-200 rounded-xl py-2.5 text-center text-sm font-semibold text-teal-700">
-                          ✅ Truck at destination — awaiting client QR scan
-                        </div>
-                      )}
-                      <button
-                        onClick={() => setTimelineId(timelineId === order.id ? null : order.id)}
-                        className="text-sm font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-4 rounded-xl transition"
-                      >
-                        🕒 {timelineId === order.id ? 'Hide' : 'Timeline'}
-                      </button>
-                    </div>
-
-                    {/* Event timeline */}
-                    {timelineId === order.id && (
-                      <div className="mt-4 pt-4 border-t border-gray-100">
-                        <OrderTimeline order={order} />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* ── COMPLETED ── */}
-          {completed.length > 0 && (
-            <section>
-              <SectionTitle icon="✅" label="Completed" count={completed.length} />
-              <div className="grid md:grid-cols-3 gap-4 mt-3">
-                {completed.map((order: any) => (
-                  <div key={order.id} className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="font-bold text-gray-900 text-sm">#{shortOrderId(order.id)}</p>
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                        {STATUS_LABEL[order.status] ?? order.status}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500">{order.volume?.toLocaleString()}L {order.fuelType}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{order.destinationName}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Empty */}
-          {orders.length === 0 && (
+          {/* Orders list */}
+          {orders.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-2xl p-14 text-center">
               <p className="text-4xl mb-3">📭</p>
               <p className="font-semibold text-gray-900 mb-1">No orders assigned yet</p>
               <p className="text-sm text-gray-500">Seller Manager will assign orders to {user.companyName} once accepted.</p>
+            </div>
+          ) : (
+            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+              <div className="grid grid-cols-[0.9fr_1.4fr_1fr_0.8fr_minmax(180px,auto)] gap-4 px-5 py-3 border-b border-gray-100 bg-slate-50">
+                {['Order', 'Fuel', 'Destination', 'Status', 'Action'].map((h, i) => (
+                  <p key={i} className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">{h}</p>
+                ))}
+              </div>
+
+              <div className="divide-y divide-gray-50">
+                {orders.map(order => {
+                  const isOpen = detailId === order.id;
+                  const truck  = trucks.find(t => t.id === order.assignedTruckId);
+                  const theft  = order.clientId === 'client-002' && order.status === 'EN_ROUTE';
+                  return (
+                    <div key={order.id}>
+                      {/* Summary row */}
+                      <div
+                        onClick={() => setDetailId(isOpen ? null : order.id)}
+                        className={`grid grid-cols-[0.9fr_1.4fr_1fr_0.8fr_minmax(180px,auto)] gap-4 px-5 py-4 items-center cursor-pointer transition hover:bg-slate-50/60 ${
+                          order.status === 'ASSIGNED_TO_TSP' ? 'bg-yellow-50/30' : ''
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <CopyId value={shortOrderId(order.id)} label={`#${shortOrderId(order.id)}`} className="font-bold text-gray-900 text-sm" />
+                            {theft && <span className="text-[10px] font-black text-red-600 bg-red-100 px-1.5 py-0.5 rounded-full animate-pulse">🚨</span>}
+                          </div>
+                          <p className="text-xs text-gray-400 mt-0.5">{order.clientName}</p>
+                        </div>
+                        <p className="text-sm font-semibold text-gray-800">{fuelSummary(order)}</p>
+                        <p className="text-sm text-gray-600 truncate">{order.destinationName ?? '—'}</p>
+                        <span className={`inline-block text-[11px] font-bold px-2.5 py-1 rounded-full w-fit ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                          {STATUS_LABEL[order.status] ?? order.status}
+                        </span>
+
+                        {/* Action — the next step for this order */}
+                        <div className="flex items-center justify-between gap-2" onClick={e => e.stopPropagation()}>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {order.status === 'ASSIGNED_TO_TSP' && (
+                              <button
+                                onClick={() => { setAssigning(order); setSelectedTruck(''); }}
+                                className="text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg transition"
+                              >
+                                Assign truck
+                              </button>
+                            )}
+                            {order.status === 'ASSIGNED' && (
+                              <button
+                                onClick={() => handleLoadFuel(order)}
+                                className="text-xs font-bold text-white bg-cyan-600 hover:bg-cyan-700 px-3 py-1.5 rounded-lg transition"
+                              >
+                                Load fuel
+                              </button>
+                            )}
+                            {order.status === 'LOADING' && (
+                              <span className="text-xs font-semibold text-cyan-700 flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 bg-cyan-500 rounded-full animate-pulse" /> Loading…
+                              </span>
+                            )}
+                            {order.status === 'LOADED' && (
+                              <button
+                                onClick={() => handleStartJourney(order)}
+                                disabled={journeyLoading === order.id}
+                                className="text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 px-3 py-1.5 rounded-lg transition"
+                              >
+                                {journeyLoading === order.id ? 'Starting…' : 'Start journey'}
+                              </button>
+                            )}
+                            {['EN_ROUTE', 'ARRIVED', 'COMPLETED'].includes(order.status) && (
+                              <button
+                                onClick={() => router.push(`/transport/fleet-monitor?order=${order.id}`)}
+                                className="text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-1.5 rounded-lg transition"
+                              >
+                                {order.status === 'COMPLETED' ? 'View' : 'Track'}
+                              </button>
+                            )}
+                            {order.status === 'CANCELLED' && <span className="text-xs text-gray-400">—</span>}
+                          </div>
+                          <svg
+                            onClick={() => setDetailId(isOpen ? null : order.id)}
+                            className={`w-4 h-4 text-gray-300 cursor-pointer transition-transform flex-shrink-0 ${isOpen ? 'rotate-90' : ''}`}
+                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </div>
+                      </div>
+
+                      {/* Expanded detail */}
+                      {isOpen && (
+                        <div className="border-t border-gray-100 bg-slate-50 px-5 py-4 space-y-4">
+
+                          {/* Quick facts */}
+                          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                            <Fact label="Fuel" value={fuelSummary(order)} />
+                            <Fact label="Destination" value={order.destinationName ?? '—'} sub={order.destinationAddress} />
+                            <Fact label="Client" value={order.clientName ?? '—'} />
+                            <Fact
+                              label="Truck"
+                              value={order.assignedTruckRegistration ?? 'Not assigned'}
+                              sub={order.assignedDriverName ? `${order.assignedDriverName}${truck?.qrCode ? ` · ${truck.qrCode}` : ''}` : undefined}
+                            />
+                          </div>
+
+                          {/* Progress (once a truck is on the job) */}
+                          {['ASSIGNED', 'LOADING', 'LOADED', 'EN_ROUTE', 'ARRIVED', 'COMPLETED'].includes(order.status) && (
+                            <JourneyProgress status={order.status} />
+                          )}
+
+                          {/* Live compartment fuel — fills as the truck loads at the depot */}
+                          {['LOADING', 'LOADED', 'EN_ROUTE', 'ARRIVED', 'COMPLETED'].includes(order.status) && (
+                            <div className="bg-white border border-gray-200 rounded-xl p-4">
+                              <CompartmentFuel order={order} />
+                            </div>
+                          )}
+
+                          {/* Timeline */}
+                          <div className="border-t border-gray-100 pt-3">
+                            <OrderTimeline order={order} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </main>
@@ -354,14 +359,13 @@ export default function TransportOrdersPage() {
               <button onClick={() => setAssigning(null)} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition">✕</button>
             </div>
 
-            {/* Order summary */}
             <div className="bg-slate-50 rounded-xl p-4 mb-5 border border-slate-200">
               <p className="text-xs text-gray-500 mb-1">Order #{shortOrderId(assigning.id)}</p>
-              <p className="font-bold text-gray-900">{assigning.volume?.toLocaleString()}L {assigning.fuelType}</p>
+              <p className="font-bold text-gray-900">{fuelSummary(assigning)}</p>
               <div className="flex flex-wrap gap-1.5 mt-2">
                 {orderFuelBreakdown(assigning).map(f => (
                   <span key={f.fuelType} className="text-[11px] font-semibold bg-white border border-slate-200 text-slate-700 px-2 py-0.5 rounded-full">
-                    Needs {f.volume.toLocaleString()}L {f.fuelType}
+                    {Math.round(f.volume / 9100)} × {f.fuelType}
                   </span>
                 ))}
               </div>
@@ -369,7 +373,6 @@ export default function TransportOrdersPage() {
               <p className="text-xs text-gray-400 mt-1">{assigning.clientName}</p>
             </div>
 
-            {/* Truck picker */}
             {idleTrucks.length === 0 ? (
               <div className="text-center py-6">
                 <p className="text-3xl mb-2">🚛</p>
@@ -387,9 +390,7 @@ export default function TransportOrdersPage() {
                       key={truck.id}
                       onClick={() => setSelectedTruck(truck.id)}
                       className={`w-full text-left p-4 rounded-xl border-2 transition-all ${
-                        isSelected
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-gray-300'
+                        isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -401,7 +402,7 @@ export default function TransportOrdersPage() {
                           <p className="text-xs text-gray-500 mt-0.5">
                             {truck.compartments?.length} compartments · {truck.capacity?.toLocaleString()}L capacity
                           </p>
-                          {driver && <p className="text-xs text-blue-600 mt-1">👤 {driver.firstName} {driver.lastName}</p>}
+                          {driver && <p className="text-xs text-blue-600 mt-1">{driver.firstName} {driver.lastName}</p>}
                         </div>
                         {isSelected && <span className="text-blue-600 font-bold text-lg">✓</span>}
                       </div>
@@ -432,39 +433,12 @@ export default function TransportOrdersPage() {
 
 // ── Sub-components ────────────────────────────────────────────
 
-function SectionTitle({ icon, label, count }: { icon: string; label: string; count: number }) {
+function Fact({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <span>{icon}</span>
-      <h2 className="font-bold text-gray-900">{label}</h2>
-      <span className="text-xs font-semibold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{count}</span>
-    </div>
-  );
-}
-
-function OrderCard({ order, children }: { order: any; children: React.ReactNode }) {
-  return (
-    <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-      <div className="flex items-start justify-between mb-3">
-        <div>
-          <p className="font-bold text-gray-900">Order #{shortOrderId(order.id)}</p>
-          <p className="text-xs text-gray-400 mt-0.5">{order.clientName}</p>
-        </div>
-        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
-          {STATUS_LABEL[order.status] ?? order.status}
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-2 mb-4 text-sm">
-        <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-100">
-          <p className="text-xs text-gray-400">Fuel</p>
-          <p className="font-semibold text-gray-900">{order.volume?.toLocaleString()}L {order.fuelType}</p>
-        </div>
-        <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-100">
-          <p className="text-xs text-gray-400">Destination</p>
-          <p className="font-semibold text-gray-900 text-xs truncate">{order.destinationName}</p>
-        </div>
-      </div>
-      {children}
+    <div className="bg-white border border-gray-200 rounded-lg px-3 py-2">
+      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{label}</p>
+      <p className="text-sm font-semibold text-gray-800 truncate">{value}</p>
+      {sub && <p className="text-[11px] text-gray-400 truncate">{sub}</p>}
     </div>
   );
 }
@@ -472,11 +446,13 @@ function OrderCard({ order, children }: { order: any; children: React.ReactNode 
 function JourneyProgress({ status }: { status: string }) {
   const steps = [
     { key: 'ASSIGNED',  label: 'Assigned' },
+    { key: 'LOADED',    label: 'Loaded'   },
     { key: 'EN_ROUTE',  label: 'En Route' },
     { key: 'ARRIVED',   label: 'Arrived'  },
     { key: 'COMPLETED', label: 'Delivered'},
   ];
-  const idx = steps.findIndex(s => s.key === status);
+  const effective = status === 'LOADING' ? 'ASSIGNED' : status;
+  const idx = steps.findIndex(s => s.key === effective);
   return (
     <div className="flex items-center gap-0">
       {steps.map((step, i) => {

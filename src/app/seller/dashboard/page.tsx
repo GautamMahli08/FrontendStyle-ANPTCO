@@ -92,7 +92,7 @@ export default function SellerDashboard() {
                 onClick={() => router.push('/seller/fleet-monitor')}
                 className="bg-red-600 hover:bg-red-700 text-white font-semibold px-4 py-2 rounded-xl text-sm transition flex-shrink-0"
               >
-                View Alerts →
+                View Alerts
               </button>
             </div>
           )}
@@ -111,7 +111,7 @@ export default function SellerDashboard() {
                 onClick={() => router.push('/seller/orders')}
                 className="bg-amber-600 hover:bg-amber-700 text-white font-semibold px-4 py-2 rounded-xl text-sm transition flex-shrink-0"
               >
-                Review Orders →
+                Review Orders
               </button>
             </div>
           )}
@@ -132,7 +132,7 @@ export default function SellerDashboard() {
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                 <h2 className="font-bold text-gray-900 text-sm">Recent Orders</h2>
                 <button onClick={() => router.push('/seller/orders')} className="text-xs text-blue-600 hover:text-blue-700 font-semibold transition">
-                  Manage All →
+                  Manage All
                 </button>
               </div>
               <div className="divide-y divide-gray-50">
@@ -271,7 +271,7 @@ function ActionItem({ step, title, desc, urgent, onClick, cta, done }: {
               onClick={onClick}
               className="mt-2 text-xs font-bold text-blue-600 hover:text-blue-700 transition"
             >
-              {cta} →
+              {cta}
             </button>
           )}
         </div>

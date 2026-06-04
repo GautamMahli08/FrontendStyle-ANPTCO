@@ -25,6 +25,7 @@ const nav: Record<UserRole, Array<{ name: string; path: string; icon: string }>>
   TRANSPORT_ADMIN: [
     { name: 'Dashboard',      path: '/transport/dashboard',       icon: '🏠' },
     { name: 'Orders',         path: '/transport/orders',          icon: '📦' },
+    { name: 'Fleet Monitor',  path: '/transport/fleet-monitor',   icon: '🗺️' },
     { name: 'My Trucks',      path: '/transport/trucks',          icon: '🚛' },
     { name: 'Drivers',        path: '/transport/drivers',         icon: '👥' },
   ],

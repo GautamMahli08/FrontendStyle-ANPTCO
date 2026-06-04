@@ -99,7 +99,7 @@ export default function AdminAnalyticsPage() {
 
         <main className="p-8">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Platform Analytics 📊</h1>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Platform Analytics</h1>
             <p className="text-gray-600">Comprehensive insights across the entire platform</p>
           </div>
 

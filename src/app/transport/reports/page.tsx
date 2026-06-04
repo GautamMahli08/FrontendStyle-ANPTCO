@@ -389,7 +389,7 @@ export default function TransportReportsPage() {
           {/* Header + Range Selector */}
           <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Reports 📊</h1>
+              <h1 className="text-3xl font-bold text-gray-900">Reports</h1>
               <p className="text-sm text-gray-500 mt-1">
                 Trip history, driver performance, and fleet utilization
               </p>
@@ -507,7 +507,7 @@ export default function TransportReportsPage() {
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-base font-bold text-gray-900">Top Drivers</h3>
                   <button onClick={() => setTab('drivers')} className="text-sm text-blue-600 hover:underline">
-                    View All →
+                    View All
                   </button>
                 </div>
                 {driverStats.length === 0 ? (

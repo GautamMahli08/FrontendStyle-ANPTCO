@@ -226,7 +226,7 @@ export default function AssignTransporterPage() {
                   onClick={() => router.push('/seller/invite-tsp')}
                   className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-3 rounded-lg transition-colors"
                 >
-                  Invite Transport Providers →
+                  Invite Transport Providers
                 </button>
               </div>
             )}

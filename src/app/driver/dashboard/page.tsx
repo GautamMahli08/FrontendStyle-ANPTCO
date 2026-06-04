@@ -304,7 +304,7 @@ text-xl
 mb-4
 ">
 
-Driver Information 👤
+Driver Information
 
 </h2>
 
@@ -349,7 +349,7 @@ text-xl
 mb-4
 ">
 
-Assigned Truck 🚛
+Assigned Truck
 
 </h2>
 
@@ -418,7 +418,7 @@ text-xl
 mb-4
 ">
 
-Live Sensor Telemetry 📡
+Live Sensor Telemetry
 
 </h2>
 
@@ -483,7 +483,7 @@ text-xl
 mb-4
 ">
 
-Active Delivery 📦
+Active Delivery
 
 </h2>
 
@@ -509,7 +509,7 @@ text-green-800
 mb-1
 ">
 
-🚛 Delivery In Progress
+Delivery In Progress
 
 </p>
 
@@ -583,7 +583,7 @@ font-medium
 "
 >
 
-📍 Live Map
+Live Map
 
 </button>
 
@@ -598,7 +598,7 @@ font-medium
 "
 >
 
-🚚 Start Trip
+Start Trip
 
 </button>
 
@@ -613,7 +613,7 @@ font-medium
 "
 >
 
-⬇️ Offloading
+Offloading
 
 </button>
 
@@ -628,7 +628,7 @@ font-medium
 "
 >
 
-✅ Complete
+Complete
 
 </button>
 
@@ -661,7 +661,7 @@ text-xl
 mb-4
 ">
 
-Live Alerts 🚨
+Live Alerts
 
 </h2>
 
@@ -710,7 +710,7 @@ font-semibold
 text-blue-800
 ">
 
-📍 GPS Tracking Active
+GPS Tracking Active
 
 </p>
 
@@ -738,7 +738,7 @@ font-semibold
 text-red-800
 ">
 
-🛢️ Fuel Monitoring Enabled
+Fuel Monitoring Enabled
 
 </p>
 

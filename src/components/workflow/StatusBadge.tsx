@@ -107,6 +107,15 @@ color:
 
 },
 
+DELIVERY_REJECTED:{
+
+label:'⛔ Delivery Rejected',
+
+color:
+'bg-red-100 text-red-800',
+
+},
+
 OFFLOADING_IN_PROGRESS:{
 
 label:'⬇️ Offloading',

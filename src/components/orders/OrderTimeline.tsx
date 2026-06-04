@@ -59,12 +59,12 @@ export default function OrderTimeline({
               <span className={`relative z-10 mt-1 w-3 h-3 rounded-full flex-shrink-0 ring-2 ring-white ${TONE_DOT[e.tone]}`} />
               {/* Content */}
               <div className="flex-1 min-w-0 -mt-0.5">
-                <div className="flex items-baseline justify-between gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <p className={`text-sm font-semibold ${TONE_TEXT[e.tone]}`}>
                     <span className="mr-1">{e.icon}</span>{e.label}
                   </p>
                   {fmtTime(e.at) && (
-                    <span className="text-[11px] text-gray-400 flex-shrink-0 whitespace-nowrap">{fmtTime(e.at)}</span>
+                    <span className="text-[11px] text-gray-400 whitespace-nowrap">· {fmtTime(e.at)}</span>
                   )}
                 </div>
                 {e.detail && <p className="text-xs text-gray-500 mt-0.5 truncate">{e.detail}</p>}

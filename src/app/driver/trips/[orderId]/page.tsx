@@ -393,7 +393,7 @@ handleCompleteDelivery();
               ← Back
             </button>
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Trip Details 🚛</h1>
+              <h1 className="text-3xl font-bold text-gray-900">Trip Details</h1>
               <p className="text-gray-500">Order #{shortOrderId(order.id)}</p>
             </div>
           </div>

@@ -291,7 +291,7 @@ savedUser
             disabled={loading}
             className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-medium py-3 rounded-lg transition-colors"
           >
-            {loading ? 'Creating Account...' : step === 1 ? 'Continue →' : 'Create Account'}
+            {loading ? 'Creating Account...' : step === 1 ? 'Continue' : 'Create Account'}
           </button>
         </form>
 

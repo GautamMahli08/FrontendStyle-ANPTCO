@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header from '@/src/components/layout/Header';
+import ToggleSwitch from '@/src/components/ui/ToggleSwitch';
 import {
   getCurrentUser,
   setCurrentUser,
@@ -59,6 +60,12 @@ export default function TransportDriversPage() {
     // Filter for this TSP's drivers and trucks
     setDrivers(allDrivers.filter(d => d.tspId === currentUser.id));
     setTrucks(allTrucks.filter(t => t.tspId === currentUser.id));
+  };
+
+  // Enable / disable a driver
+  const toggleDriver = (driver: any) => {
+    updateDriver(driver.id, { disabled: !driver.disabled });
+    if (user) loadData(user);
   };
 
   const handleRoleChange = (userId: string) => {
@@ -219,7 +226,9 @@ truck.assignedDriverId ===
 driver.id
 );
                 return (
-                  <div key={driver.id} className="bg-white rounded-xl p-6 border border-gray-200">
+                  <div key={driver.id} className={`rounded-xl p-6 border ${
+                    driver.disabled ? 'bg-red-50/40 border-red-200' : 'bg-white border-gray-200'
+                  }`}>
                     <div className="flex items-start justify-between mb-4">
                       <div>
                         <h3 className="text-lg font-bold text-gray-900">
@@ -227,15 +236,21 @@ driver.id
                         </h3>
                         <p className="text-sm text-gray-600">{driver.email}</p>
                       </div>
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                        driver.currentStatus === 'AVAILABLE' ? 'bg-green-100 text-green-700' :
-                        driver.currentStatus === 'ON_TRIP' ? 'bg-blue-100 text-blue-700' :
-                        'bg-gray-100 text-gray-700'
-                      }`}>
-                        {driver.currentStatus === 'AVAILABLE' ? '✓ Available' :
-                         driver.currentStatus === 'ON_TRIP' ? '🚛 On Trip' :
-                         '⏸️ Off Duty'}
-                      </span>
+                      {driver.disabled ? (
+                        <span className="px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                          🚫 Disabled
+                        </span>
+                      ) : (
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          driver.currentStatus === 'AVAILABLE' ? 'bg-green-100 text-green-700' :
+                          driver.currentStatus === 'ON_TRIP' ? 'bg-blue-100 text-blue-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {driver.currentStatus === 'AVAILABLE' ? '✓ Available' :
+                           driver.currentStatus === 'ON_TRIP' ? '🚛 On Trip' :
+                           '⏸️ Off Duty'}
+                        </span>
+                      )}
                     </div>
 
                     <div className="space-y-2 text-sm mb-4">
@@ -255,6 +270,18 @@ Driver linked successfully
                           <p className="text-xs text-orange-800">No truck assigned</p>
                         </div>
                       )}
+                    </div>
+
+                    {/* Enable / disable toggle */}
+                    <div className="pt-3 border-t flex items-center justify-between">
+                      <span className="text-xs font-medium text-gray-500">
+                        {driver.disabled ? 'Driver disabled' : 'Driver active'}
+                      </span>
+                      <ToggleSwitch
+                        size="sm"
+                        enabled={!driver.disabled}
+                        onChange={() => toggleDriver(driver)}
+                      />
                     </div>
                   </div>
                 );

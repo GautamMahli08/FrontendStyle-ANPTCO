@@ -93,7 +93,7 @@ export default function TransportAnalyticsPage() {
 
         <main className="p-8">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Fleet Analytics 📊</h1>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Fleet Analytics</h1>
             <p className="text-gray-600">Performance metrics and insights for your fleet</p>
           </div>
 
