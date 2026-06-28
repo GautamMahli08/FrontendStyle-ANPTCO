@@ -2,107 +2,144 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { addUser, setCurrentUser, findUserByEmail, DELIVERY_ZONES  } from '@/src/lib/demo-data';
-import { User } from '@/src/types';
+import { signUp, confirmSignUp, signIn } from '@/src/lib/auth';
+import { api } from '@/src/lib/api';
+
+type Step = 'personal' | 'station' | 'confirm' | 'done';
+
+interface FormData {
+  firstName:     string;
+  lastName:      string;
+  email:         string;
+  password:      string;
+  stationName:   string;
+  stationLat:    string;
+  stationLng:    string;
+  stationRadius: string;
+  phone:         string;
+  code:          string;
+}
+
+const EMPTY: FormData = {
+  firstName:     '',
+  lastName:      '',
+  email:         '',
+  password:      '',
+  stationName:   '',
+  stationLat:    '',
+  stationLng:    '',
+  stationRadius: '100',
+  phone:         '',
+  code:          '',
+};
 
 export default function ClientSignup() {
   const router = useRouter();
-  const [step, setStep] = useState(1);
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    password: '',
-    stationName: '',
-    phone: '',
-    selectedLocation: '',
-  });
-  const [error, setError] = useState('');
+  const [step,    setStep]    = useState<Step>('personal');
+  const [form,    setForm]    = useState<FormData>(EMPTY);
+  const [error,   setError]   = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const set = (k: keyof FormData) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.value }));
+
+  // ── Step 1: personal info → Cognito signUp ───────────────────
+  const handlePersonal = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
-
-    if (step === 1) {
-      if (!formData.firstName || !formData.lastName || !formData.email || !formData.password) {
-        setError('Please fill in all fields');
-        return;
-      }
-
-      if (findUserByEmail(formData.email)) {
-        setError('Email already registered');
-        return;
-      }
-
-      setStep(2);
-      return;
+    if (!form.firstName || !form.lastName || !form.email || !form.password) {
+      setError('Please fill in all fields'); return;
     }
-
-    if (step === 2) {
-      if (!formData.stationName || !formData.phone || !formData.selectedLocation) {
-        setError('Please fill in all fields and select a location');
-        return;
-      }
-
-      setLoading(true);
-
-      const userId = `client-${Date.now()}`;
-
-      const newUser: User = {
-        id: userId,
-        email: formData.email,
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        role: 'CLIENT',
-        verified: true,
-      };
-
-      addUser(newUser);
-      setCurrentUser(newUser);
-
+    setLoading(true);
+    try {
+      const { nextStep } = await signUp({
+        email:     form.email,
+        password:  form.password,
+        firstName: form.firstName,
+        lastName:  form.lastName,
+      });
+      if (nextStep === 'CONFIRM_SIGN_UP') setStep('confirm');
+      else                                setStep('station');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Sign-up failed');
+    } finally {
       setLoading(false);
-      setStep(3);
-
-      setTimeout(() => {
-        router.push('/client/dashboard');
-      }, 2000);
     }
   };
 
-  if (step === 3) {
+  // ── Step confirm: 6-digit code ────────────────────────────────
+  const handleConfirm = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      await confirmSignUp(form.email, form.code);
+      setStep('station');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Confirmation failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Step 2: station geofence + finish ─────────────────────────
+  const handleStation = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setError('');
+    const lat    = parseFloat(form.stationLat);
+    const lng    = parseFloat(form.stationLng);
+    const radius = parseInt(form.stationRadius, 10);
+    if (!form.stationName || isNaN(lat) || isNaN(lng)) {
+      setError('Station name, latitude and longitude are required'); return;
+    }
+    if (radius < 50) {
+      setError('Minimum geofence radius is 50 m'); return;
+    }
+    setLoading(true);
+    try {
+      // Sign in to get a session (PostConfirmation already set workspace + CLIENT group)
+      await signIn(form.email, form.password);
+      // Register the station geofence
+      await api.stations.create({
+        name:          form.stationName,
+        latitude:      lat,
+        longitude:     lng,
+        radius_meters: radius,
+      });
+      setStep('done');
+      setTimeout(() => router.push('/client/dashboard'), 2000);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to create station');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Done screen ───────────────────────────────────────────────
+  if (step === 'done') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-600 to-red-700 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-2xl p-12 max-w-md w-full text-center">
-          <div className="animate-bounce mb-6">
-            <span className="text-8xl">✅</span>
-          </div>
+          <div className="animate-bounce mb-6"><span className="text-8xl">✅</span></div>
           <h2 className="text-3xl font-bold text-gray-900 mb-4">Account Created!</h2>
           <p className="text-gray-600 mb-6">
-            Welcome, {formData.firstName}!<br />
-            You can now place fuel orders.
+            Welcome, {form.firstName}!<br />Your station is registered — you can now place fuel orders.
           </p>
-          <div className="bg-orange-50 p-4 rounded-lg text-sm text-left">
-            <p className="font-semibold text-orange-900 mb-2">Next Steps:</p>
-            <ul className="space-y-1 text-orange-800">
-              <li>→ Place your first fuel order</li>
-              <li>→ Track delivery in real-time</li>
-              <li>→ Scan QR code to accept delivery</li>
-              <li>→ View delivery history</li>
-            </ul>
-          </div>
-          <p className="text-sm text-gray-500 mt-6">Redirecting to dashboard...</p>
+          <p className="text-sm text-gray-500">Redirecting to dashboard…</p>
         </div>
       </div>
     );
   }
 
+  const stepNum  = step === 'personal' ? 1 : step === 'confirm' ? 1 : 2;
+  const totalSteps = 2;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-600 to-red-700 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-2xl w-full">
         <button
-          onClick={() => step === 1 ? router.push('/') : setStep(1)}
-          className="text-orange-600 hover:text-orange-700 mb-6"
+          onClick={() => step === 'personal' ? router.push('/') : setStep('personal')}
+          className="text-orange-600 hover:text-orange-700 mb-6 text-sm"
         >
           ← Back
         </button>
@@ -113,175 +150,131 @@ export default function ClientSignup() {
           <p className="text-gray-600">Order fuel for your station</p>
         </div>
 
-        {/* Progress Steps */}
+        {/* Progress */}
         <div className="flex items-center justify-center mb-8">
-          <div className={`flex items-center ${step >= 1 ? 'text-orange-600' : 'text-gray-400'}`}>
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${step >= 1 ? 'bg-orange-600 text-white' : 'bg-gray-300'}`}>
-              1
+          {[1, 2].map(n => (
+            <div key={n} className="flex items-center">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold
+                ${stepNum >= n ? 'bg-orange-600 text-white' : 'bg-gray-200 text-gray-400'}`}>
+                {n}
+              </div>
+              <span className={`ml-2 font-medium text-sm ${stepNum >= n ? 'text-orange-600' : 'text-gray-400'}`}>
+                {n === 1 ? 'Account' : 'Station'}
+              </span>
+              {n < totalSteps && <div className={`w-16 h-1 mx-3 ${stepNum > n ? 'bg-orange-600' : 'bg-gray-200'}`} />}
             </div>
-            <span className="ml-2 font-medium">Personal</span>
-          </div>
-          <div className={`w-16 h-1 mx-2 ${step >= 2 ? 'bg-orange-600' : 'bg-gray-300'}`}></div>
-          <div className={`flex items-center ${step >= 2 ? 'text-orange-600' : 'text-gray-400'}`}>
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${step >= 2 ? 'bg-orange-600 text-white' : 'bg-gray-300'}`}>
-              2
-            </div>
-            <span className="ml-2 font-medium">Station</span>
-          </div>
+          ))}
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {step === 1 && (
-            <>
-              <div className="grid md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    First Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.firstName}
-                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                    placeholder="Fatima"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Last Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.lastName}
-                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                    placeholder="Al-Hashmi"
-                    required
-                  />
-                </div>
-              </div>
-
+        {/* ── Personal info ──────────────────────────────────── */}
+        {step === 'personal' && (
+          <form onSubmit={handlePersonal} className="space-y-5">
+            <div className="grid md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email Address *
-                </label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                  placeholder="fatima@station.om"
-                  required
-                />
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">First Name *</label>
+                <input type="text" value={form.firstName} onChange={set('firstName')}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  placeholder="Fatima" required />
               </div>
-
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Password *
-                </label>
-                <input
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                  placeholder="••••••••"
-                  minLength={6}
-                  required
-                />
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Last Name *</label>
+                <input type="text" value={form.lastName} onChange={set('lastName')}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  placeholder="Al-Hashmi" required />
               </div>
-            </>
-          )}
-
-          {step === 2 && (
-            <>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Station Name *
-                </label>
-                <input
-                  type="text"
-                  value={formData.stationName}
-                  onChange={(e) => setFormData({ ...formData, stationName: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                  placeholder="My Petrol Station"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Phone Number *
-                </label>
-                <input
-                  type="tel"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                  placeholder="+968 9345 6789"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Select Your Station Location *
-                </label>
-                <select
-                  value={formData.selectedLocation}
-                  onChange={(e) => setFormData({ ...formData, selectedLocation: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                  required
-                >
-                  <option value="">Choose location...</option>
-                  {DELIVERY_ZONES.map((zone) => (
-                    <option key={zone.id} value={zone.id}>
-                      {zone.name} - {zone.clientName}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-500 mt-1">
-                  Select from available delivery zones in Muscat
-                </p>
-              </div>
-
-              {formData.selectedLocation && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <h4 className="font-semibold text-blue-900 mb-2">📍 Selected Location</h4>
-                  {DELIVERY_ZONES.filter(z => z.id === formData.selectedLocation).map((zone) => (
-                    <div key={zone.id} className="text-sm text-blue-800">
-                      <p><strong>{zone.name}</strong></p>
-                      <p>{zone.address}</p>
-                      <p className="text-xs mt-1">
-                        Coords: {zone.lat}, {zone.lng}<br />
-                        Delivery radius: {zone.radius}m
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-
-          {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-              <p className="text-sm text-red-800">{error}</p>
             </div>
-          )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Email Address *</label>
+              <input type="email" value={form.email} onChange={set('email')}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                placeholder="fatima@station.om" required />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Password *</label>
+              <input type="password" value={form.password} onChange={set('password')}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                placeholder="Min 8 characters" minLength={8} required />
+            </div>
+            {error && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">{error}</p>}
+            <button type="submit" disabled={loading}
+              className="w-full bg-orange-600 hover:bg-orange-700 disabled:bg-gray-300 text-white font-semibold py-3 rounded-lg transition-colors text-sm">
+              {loading ? 'Creating account…' : 'Continue'}
+            </button>
+          </form>
+        )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-orange-600 hover:bg-orange-700 disabled:bg-gray-400 text-white font-medium py-3 rounded-lg transition-colors"
-          >
-            {loading ? 'Creating Account...' : step === 1 ? 'Continue' : 'Create Account'}
-          </button>
-        </form>
+        {/* ── Confirm code ────────────────────────────────────── */}
+        {step === 'confirm' && (
+          <form onSubmit={handleConfirm} className="space-y-5">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+              We sent a 6-digit code to <strong>{form.email}</strong>. Enter it below to verify your account.
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Verification code *</label>
+              <input type="text" value={form.code} onChange={set('code')}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent tracking-widest text-center text-xl"
+                placeholder="000000" maxLength={6} required />
+            </div>
+            {error && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">{error}</p>}
+            <button type="submit" disabled={loading}
+              className="w-full bg-orange-600 hover:bg-orange-700 disabled:bg-gray-300 text-white font-semibold py-3 rounded-lg transition-colors text-sm">
+              {loading ? 'Verifying…' : 'Verify & continue'}
+            </button>
+          </form>
+        )}
+
+        {/* ── Station details ──────────────────────────────────── */}
+        {step === 'station' && (
+          <form onSubmit={handleStation} className="space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Station Name *</label>
+              <input type="text" value={form.stationName} onChange={set('stationName')}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                placeholder="My Petrol Station" required />
+            </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Latitude *</label>
+                <input type="number" step="any" value={form.stationLat} onChange={set('stationLat')}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  placeholder="23.6139" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Longitude *</label>
+                <input type="number" step="any" value={form.stationLng} onChange={set('stationLng')}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  placeholder="58.5922" required />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Geofence Radius (metres) * <span className="font-normal text-gray-500">min 50 m</span>
+              </label>
+              <input type="number" value={form.stationRadius} onChange={set('stationRadius')}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                min={50} max={5000} required />
+              <p className="text-xs text-gray-500 mt-1">
+                Delivery is unlocked when the truck enters this radius around your station.
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Phone</label>
+              <input type="tel" value={form.phone} onChange={set('phone')}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                placeholder="+968 9345 6789" />
+            </div>
+            {error && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">{error}</p>}
+            <button type="submit" disabled={loading}
+              className="w-full bg-orange-600 hover:bg-orange-700 disabled:bg-gray-300 text-white font-semibold py-3 rounded-lg transition-colors text-sm">
+              {loading ? 'Registering station…' : 'Create account & register station'}
+            </button>
+          </form>
+        )}
 
         <p className="text-center text-sm text-gray-600 mt-6">
           Already have an account?{' '}
-          <button onClick={() => router.push('/')} className="text-orange-600 hover:text-orange-700 font-medium">
-            Sign In
+          <button onClick={() => router.push('/auth/login')} className="text-orange-600 hover:text-orange-700 font-medium">
+            Sign in
           </button>
         </p>
       </div>

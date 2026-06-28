@@ -4,12 +4,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders, getKYCDocuments, getFuelAnomalies, shortOrderId } from '@/src/lib/demo-data';
+import { getCurrentUser } from '@/src/lib/user-store';
+import { api, type ApiOrder } from '@/src/lib/api';
 
 const STATUS_COLOR: Record<string, string> = {
   PLACED:             'bg-yellow-100 text-yellow-700',
   ACCEPTED_BY_SELLER: 'bg-purple-100 text-purple-700',
-  ASSIGNED_TO_TSP:    'bg-yellow-100 text-yellow-700',
+  ASSIGNED_TO_TSP:    'bg-amber-100  text-amber-700',
   ASSIGNED:           'bg-indigo-100 text-indigo-700',
   EN_ROUTE:           'bg-blue-100   text-blue-700',
   ARRIVED:            'bg-teal-100   text-teal-700',
@@ -18,263 +19,124 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export default function SellerDashboard() {
-  const router  = useRouter();
-  const [user,      setUser]      = useState<any>(null);
-  const [orders,    setOrders]    = useState<any[]>([]);
-  const [kycDocs,   setKycDocs]   = useState<any[]>([]);
-  const [anomalies, setAnomalies] = useState<any[]>([]);
-  const [mounted,   setMounted]   = useState(false);
+  const router = useRouter();
+  const user   = getCurrentUser();
 
-  const load = useCallback((u: any) => {
-    setOrders(getOrders().filter((o: any) => o.workspaceId === u.workspaceId));
-    setKycDocs(getKYCDocuments());
-    setAnomalies(getFuelAnomalies());
+  const [orders,  setOrders]  = useState<ApiOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setOrders(await api.orders.list());
+      setError(null);
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to load orders');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    setMounted(true);
-    const u = getCurrentUser();
-    if (!u || u.role !== 'SELLER_MANAGER') { router.push('/'); return; }
-    setUser(u);
-    load(u);
-    const iv = setInterval(() => load(u), 3000);
-    return () => clearInterval(iv);
-  }, [router, load]);
+    if (!user) { router.replace('/auth/login'); return; }
+    load();
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, [load, router, user]);
 
-  if (!mounted || !user) return null;
+  const pending   = orders.filter(o => o.status === 'PLACED');
+  const active    = orders.filter(o => !['COMPLETED','CANCELLED','PLACED'].includes(o.status));
+  const completed = orders.filter(o => o.status === 'COMPLETED').length;
 
-  const pending        = orders.filter(o => o.status === 'PLACED');
-  const awaitingTSP    = orders.filter(o => o.status === 'ACCEPTED_BY_SELLER');
-  const active         = orders.filter(o => ['ASSIGNED_TO_TSP', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(o.status));
-  const completed      = orders.filter(o => o.status === 'COMPLETED');
-  const pendingKYC     = kycDocs.filter(k => k.reviewStatus === 'PENDING' && k.sellerCode === user.sellerCode);
-  const openAlerts     = anomalies.filter(a => a.status !== 'RESOLVED');
+  if (!user) return null;
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
-      <Sidebar userRole={user.role} />
+    <div className="flex h-screen bg-gray-50">
+      <Sidebar role="SELLER_MANAGER" />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <Header title="Seller Dashboard" user={user} />
+        <main className="flex-1 overflow-y-auto p-6 space-y-6">
 
-      <div className="flex-1 min-w-0">
-        <Header user={user} />
-
-        <main className="p-6 space-y-6">
-
-          {/* Page header */}
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-0.5">Seller Portal · ANPTCO</p>
-              <h1 className="text-2xl font-black text-gray-900">{user.firstName} {user.lastName}</h1>
-              <p className="text-sm text-gray-500 mt-0.5">Review orders, manage KYC and monitor your fleet</p>
-            </div>
-            <div className="hidden md:flex items-center gap-3">
-              <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 text-center shadow-sm">
-                <p className="text-2xl font-black text-gray-900">{active.length}</p>
-                <p className="text-xs text-gray-500">Active Deliveries</p>
-              </div>
-              <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 text-center shadow-sm">
-                <p className="text-2xl font-black text-gray-900">{orders.length}</p>
-                <p className="text-xs text-gray-500">Total Orders</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Theft alert banner */}
-          {openAlerts.length > 0 && (
-            <div className="bg-red-50 border-2 border-red-300 rounded-2xl p-5 flex items-start gap-4">
-              <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center text-xl flex-shrink-0">🚨</div>
-              <div className="flex-1">
-                <p className="font-bold text-red-800 text-lg">{openAlerts.length} Fuel Anomaly Alert{openAlerts.length > 1 ? 's' : ''}</p>
-                <p className="text-red-600 text-sm mt-0.5">
-                  {openAlerts[0].truckReg} — {openAlerts[0].fuelDropLiters}L unexpected drop on {openAlerts[0].compartment}. {openAlerts[0].location}
-                </p>
-              </div>
-              <button
-                onClick={() => router.push('/seller/fleet-monitor')}
-                className="bg-red-600 hover:bg-red-700 text-white font-semibold px-4 py-2 rounded-xl text-sm transition flex-shrink-0"
-              >
-                View Alerts
-              </button>
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">
+              {error} — <button onClick={load} className="underline">retry</button>
             </div>
           )}
 
-          {/* Pending orders banner */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: 'Total Orders',   value: orders.length,  color: 'text-blue-600'    },
+              { label: 'Pending Review', value: pending.length, color: 'text-yellow-600'  },
+              { label: 'In Progress',    value: active.length,  color: 'text-amber-600'   },
+              { label: 'Completed',      value: completed,      color: 'text-emerald-600' },
+            ].map(s => (
+              <div key={s.label} className="bg-white rounded-xl border border-slate-200 p-4">
+                <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+                <p className="text-xs text-slate-500 mt-0.5">{s.label}</p>
+              </div>
+            ))}
+          </div>
+
           {pending.length > 0 && (
-            <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-5 flex items-start gap-4">
-              <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center text-xl flex-shrink-0">📦</div>
-              <div className="flex-1">
-                <p className="font-bold text-amber-800 text-lg">{pending.length} New Order{pending.length > 1 ? 's' : ''} Waiting</p>
-                <p className="text-amber-700 text-sm mt-0.5">
-                  Review and accept {pending.length === 1 ? 'this order' : 'these orders'} to assign to a transport provider.
-                </p>
+            <div className="bg-white rounded-xl border border-amber-200">
+              <div className="px-5 py-3.5 border-b border-amber-100 flex items-center gap-2">
+                <span className="text-amber-600">⏳</span>
+                <h2 className="font-semibold text-slate-800 text-sm">Pending Approval ({pending.length})</h2>
               </div>
-              <button
-                onClick={() => router.push('/seller/orders')}
-                className="bg-amber-600 hover:bg-amber-700 text-white font-semibold px-4 py-2 rounded-xl text-sm transition flex-shrink-0"
-              >
-                Review Orders
-              </button>
-            </div>
-          )}
-
-          {/* KPIs */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <Kpi label="Pending Review"    value={pending.length}     color="amber"   badge={pending.length > 0}     onClick={() => router.push('/seller/orders')} />
-            <Kpi label="Awaiting TSP"      value={awaitingTSP.length} color="purple"  badge={awaitingTSP.length > 0} onClick={() => router.push('/seller/orders')} />
-            <Kpi label="Active Deliveries" value={active.length}      color="blue"    onClick={() => router.push('/seller/orders')} />
-            <Kpi label="Completed"         value={completed.length}   color="green" />
-          </div>
-
-          {/* Two-column: Recent Orders + Quick Actions */}
-          <div className="grid lg:grid-cols-3 gap-5">
-
-            {/* Recent Orders — 2/3 */}
-            <div className="lg:col-span-2 bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-                <h2 className="font-bold text-gray-900 text-sm">Recent Orders</h2>
-                <button onClick={() => router.push('/seller/orders')} className="text-xs text-blue-600 hover:text-blue-700 font-semibold transition">
-                  Manage All
-                </button>
-              </div>
-              <div className="divide-y divide-gray-50">
-                {orders.slice(0, 7).map(order => (
-                  <div key={order.id} className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 transition">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="font-semibold text-gray-900 text-sm">#{shortOrderId(order.id)}</p>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                          {order.status?.replace(/_/g, ' ')}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-400 mt-0.5 truncate">
-                        {order.clientName} · {order.fuelItems?.length > 1
-                          ? order.fuelItems.map((f: any) => `${f.volume.toLocaleString()}L ${f.fuelType}`).join(' + ')
-                          : `${order.volume?.toLocaleString()}L ${order.fuelType}`}
+              <div className="divide-y divide-slate-100">
+                {pending.map(order => (
+                  <div key={order.id} className="px-5 py-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">#{order.id.slice(-6).toUpperCase()}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {order.volume_liters != null && `${order.volume_liters.toLocaleString()} L`}
+                        {order.fuel_type && ` · ${order.fuel_type}`}
                       </p>
                     </div>
-                    <p className="text-[11px] text-gray-400 flex-shrink-0">{order.destinationName ?? '—'}</p>
+                    <button
+                      onClick={() => router.push(`/seller/orders/${order.id}/assign`)}
+                      className="text-xs font-semibold px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    >
+                      Review
+                    </button>
                   </div>
                 ))}
-                {orders.length === 0 && (
-                  <div className="px-5 py-10 text-center">
-                    <p className="text-3xl mb-2">📭</p>
-                    <p className="text-sm text-gray-400">No orders yet.</p>
-                  </div>
-                )}
               </div>
             </div>
-
-            {/* Action Queue — 1/3 */}
-            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="px-5 py-4 border-b border-gray-100">
-                <h2 className="font-bold text-gray-900 text-sm">Action Required</h2>
-                <p className="text-xs text-gray-400 mt-0.5">What needs your attention now</p>
-              </div>
-
-              <div className="divide-y divide-gray-50">
-
-                {/* Step 1 — Review new orders */}
-                <ActionItem
-                  step={1}
-                  title={pending.length > 0 ? `${pending.length} order${pending.length > 1 ? 's' : ''} waiting for review` : 'No new orders'}
-                  desc="Accept or decline incoming client requests"
-                  urgent={pending.length > 0}
-                  onClick={() => router.push('/seller/orders')}
-                  cta="Review Orders"
-                  done={pending.length === 0}
-                />
-
-                {/* Step 2 — Assign accepted orders to TSP */}
-                <ActionItem
-                  step={2}
-                  title={awaitingTSP.length > 0 ? `${awaitingTSP.length} order${awaitingTSP.length > 1 ? 's' : ''} need TSP assignment` : 'No orders awaiting TSP'}
-                  desc="Assign each accepted order to a transport provider"
-                  urgent={awaitingTSP.length > 0}
-                  onClick={() => router.push('/seller/orders')}
-                  cta="Assign TSP"
-                  done={awaitingTSP.length === 0}
-                />
-
-                {/* KYC */}
-                {pendingKYC.length > 0 && (
-                  <ActionItem
-                    step={3}
-                    title={`${pendingKYC.length} KYC document${pendingKYC.length > 1 ? 's' : ''} pending`}
-                    desc="Review and approve transporter KYC submissions"
-                    urgent
-                    onClick={() => router.push('/seller/kyc-review')}
-                    cta="Review KYC"
-                    done={false}
-                  />
-                )}
-
-                {/* All clear */}
-                {pending.length === 0 && awaitingTSP.length === 0 && pendingKYC.length === 0 && (
-                  <div className="px-5 py-8 text-center">
-                    <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                      </svg>
-                    </div>
-                    <p className="text-sm font-semibold text-gray-700">All caught up</p>
-                    <p className="text-xs text-gray-400 mt-0.5">No pending actions right now</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-        </main>
-      </div>
-    </div>
-  );
-}
-
-function Kpi({ label, value, color, onClick, badge }: {
-  label: string; value: number; color: string; onClick?: () => void; badge?: boolean;
-}) {
-  const c: Record<string, { card: string; num: string }> = {
-    amber:  { card: 'border-amber-200  bg-amber-50',   num: 'text-amber-700'  },
-    purple: { card: 'border-purple-200 bg-purple-50',  num: 'text-purple-700' },
-    blue:   { card: 'border-blue-200   bg-blue-50',    num: 'text-blue-700'   },
-    green:  { card: 'border-emerald-200 bg-emerald-50', num: 'text-emerald-700'},
-  };
-  const style = c[color] ?? { card: 'border-gray-200 bg-gray-50', num: 'text-gray-700' };
-  return (
-    <button
-      onClick={onClick}
-      className={`relative flex flex-col items-start p-4 rounded-2xl border-2 ${style.card} transition ${onClick ? 'hover:shadow-md cursor-pointer' : 'cursor-default'}`}
-    >
-      {badge && <span className="absolute top-3 right-3 w-2 h-2 bg-red-500 rounded-full animate-pulse" />}
-      <p className={`text-3xl font-black ${style.num}`}>{value}</p>
-      <p className="text-xs font-semibold text-gray-500 mt-1 leading-tight">{label}</p>
-    </button>
-  );
-}
-
-function ActionItem({ step, title, desc, urgent, onClick, cta, done }: {
-  step: number; title: string; desc: string; urgent: boolean;
-  onClick: () => void; cta: string; done: boolean;
-}) {
-  return (
-    <div className={`px-5 py-4 ${urgent ? 'bg-amber-50/50' : ''}`}>
-      <div className="flex items-start gap-3">
-        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-black flex-shrink-0 mt-0.5 ${
-          done ? 'bg-emerald-100 text-emerald-600' : urgent ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-400'
-        }`}>
-          {done ? '✓' : step}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className={`text-sm font-bold leading-tight ${urgent ? 'text-gray-900' : 'text-gray-400'}`}>{title}</p>
-          <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
-          {urgent && (
-            <button
-              onClick={onClick}
-              className="mt-2 text-xs font-bold text-blue-600 hover:text-blue-700 transition"
-            >
-              {cta}
-            </button>
           )}
-        </div>
+
+          <div className="bg-white rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
+              <h2 className="font-semibold text-slate-800 text-sm">All Orders</h2>
+              <button onClick={() => router.push('/seller/orders')} className="text-xs text-blue-600 hover:underline">View all</button>
+            </div>
+            {loading ? (
+              <div className="p-8 flex justify-center">
+                <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : orders.length === 0 ? (
+              <p className="p-8 text-center text-slate-400 text-sm">No orders yet.</p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {orders.slice(0, 10).map(order => (
+                  <div key={order.id} onClick={() => router.push(`/seller/orders/${order.id}/assign`)}
+                    className="px-5 py-3.5 flex items-center justify-between hover:bg-slate-50 cursor-pointer">
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">#{order.id.slice(-6).toUpperCase()}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {order.volume_liters != null && `${order.volume_liters.toLocaleString()} L`}
+                        {order.fuel_type && ` · ${order.fuel_type}`}
+                      </p>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-slate-100 text-slate-600'}`}>
+                      {order.status.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </main>
       </div>
     </div>
   );

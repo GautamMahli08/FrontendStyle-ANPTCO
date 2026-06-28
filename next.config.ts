@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
-/** @type {import('next').NextConfig} */
-const nextConfig = {
+const nextConfig: NextConfig = {
+  experimental: {
+    // Tree-shake these large packages instead of bundling entire libraries
+    optimizePackageImports: ['aws-amplify', '@aws-amplify/auth', '@aws-amplify/core'],
+  },
   async redirects() {
     return [
       { source: '/login',          destination: '/',                     permanent: false },

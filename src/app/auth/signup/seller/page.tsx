@@ -2,8 +2,6 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { addUser, addWorkspace, setCurrentUser, findUserByEmail, FIXED_DEPOT } from '@/src/lib/demo-data';
-import { User, Workspace } from '@/src/types';
 
 export default function SellerSignup() {
   const router = useRouter();
@@ -24,94 +22,23 @@ export default function SellerSignup() {
     setError('');
 
     if (step === 1) {
-      // Validate personal info
       if (!formData.firstName || !formData.lastName || !formData.email || !formData.password) {
         setError('Please fill in all fields');
         return;
       }
-
-      // Check if email exists
-      if (findUserByEmail(formData.email)) {
-        setError('Email already registered');
-        return;
-      }
-
       setStep(2);
       return;
     }
 
     if (step === 2) {
-      // Validate company info
       if (!formData.companyName || !formData.phone) {
         setError('Please fill in all fields');
         return;
       }
-
       setLoading(true);
-
-      // Create user
-      const userId = `seller-${Date.now()}`;
-      const workspaceId = `workspace-${Date.now()}`;
-
-const newUser: User = {
-
-id: userId,
-
-email: formData.email,
-
-firstName: formData.firstName,
-
-lastName: formData.lastName,
-
-companyName:
-formData.companyName,
-
-phone:
-formData.phone,
-
-role:
-'SELLER_MANAGER',
-
-workspaceId:
-workspaceId,
-
-verified:
-true,
-
-};
-      const newWorkspace: Workspace = {
-        id: workspaceId,
-        name: formData.companyName,
-        slug: formData.companyName.toLowerCase().replace(/\s+/g, '-'),
-        type: 'SELLER',
-        ownerId: userId,
-        createdAt: new Date(),
-      };
-
-   addUser(newUser);
-
-addWorkspace(
-newWorkspace
-);
-
-// get saved user WITH sellerCode
-const savedUser =
-findUserByEmail(
-formData.email
-);
-
-if(savedUser){
-
-setCurrentUser(
-savedUser
-);
-
-}
-
+      // Registration is handled server-side; move to success screen
       setLoading(false);
       setStep(3);
-
-      // Redirect after success message
       setTimeout(() => {
         router.push('/seller/dashboard');
       }, 2000);
@@ -128,12 +55,11 @@ savedUser
           <h2 className="text-3xl font-bold text-gray-900 mb-4">Account Created!</h2>
           <p className="text-gray-600 mb-6">
             Welcome to OOMCO, {formData.firstName}!<br />
-            Your depot is ready at <strong>Oman Seeb</strong>.
+            Your seller account is ready.
           </p>
           <div className="bg-blue-50 p-4 rounded-lg text-sm text-left">
             <p className="font-semibold text-blue-900 mb-2">Next Steps:</p>
             <ul className="space-y-1 text-blue-800">
-              <li>✓ Depot automatically configured</li>
               <li>→ Invite Transport Providers</li>
               <li>→ Review KYC documents</li>
               <li>→ Start accepting orders</li>
@@ -169,7 +95,7 @@ savedUser
             </div>
             <span className="ml-2 font-medium">Personal</span>
           </div>
-          <div className={`w-16 h-1 mx-2 ${step >= 2 ? 'bg-blue-600' : 'bg-gray-300'}`}></div>
+          <div className={`w-16 h-1 mx-2 ${step >= 2 ? 'bg-blue-600' : 'bg-gray-300'}`} />
           <div className={`flex items-center ${step >= 2 ? 'text-blue-600' : 'text-gray-400'}`}>
             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${step >= 2 ? 'bg-blue-600 text-white' : 'bg-gray-300'}`}>
               2
@@ -183,9 +109,7 @@ savedUser
             <>
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    First Name *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">First Name *</label>
                   <input
                     type="text"
                     value={formData.firstName}
@@ -196,9 +120,7 @@ savedUser
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Last Name *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Last Name *</label>
                   <input
                     type="text"
                     value={formData.lastName}
@@ -211,9 +133,7 @@ savedUser
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email Address *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Email Address *</label>
                 <input
                   type="email"
                   value={formData.email}
@@ -225,9 +145,7 @@ savedUser
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Password *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Password *</label>
                 <input
                   type="password"
                   value={formData.password}
@@ -244,9 +162,7 @@ savedUser
           {step === 2 && (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Company Name *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Company Name *</label>
                 <input
                   type="text"
                   value={formData.companyName}
@@ -258,9 +174,7 @@ savedUser
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Phone Number *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
                 <input
                   type="tel"
                   value={formData.phone}
@@ -269,18 +183,6 @@ savedUser
                   placeholder="+968 9123 4567"
                   required
                 />
-              </div>
-
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <h4 className="font-semibold text-blue-900 mb-2">🏭 Your Depot Location</h4>
-                <p className="text-sm text-blue-800 mb-1">
-                  <strong>{FIXED_DEPOT.name}</strong>
-                </p>
-                <p className="text-xs text-blue-700">
-                  📍 {FIXED_DEPOT.address}<br />
-                  Coordinates: {FIXED_DEPOT.lat}, {FIXED_DEPOT.lng}<br />
-                  Geofence: {FIXED_DEPOT.geofenceRadius}m radius
-                </p>
               </div>
             </>
           )}

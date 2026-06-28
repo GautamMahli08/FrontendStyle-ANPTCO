@@ -2,7 +2,7 @@
 
 import { useRouter, usePathname } from 'next/navigation';
 import { UserRole } from '@/src/types';
-import { logout } from '@/src/lib/demo-data';
+import { signOut } from '@/src/lib/auth';
 import OomcoLogo from '@/src/components/assets/OomcoLogo';
 
 const nav: Record<UserRole, Array<{ name: string; path: string; icon: string }>> = {
@@ -23,17 +23,20 @@ const nav: Record<UserRole, Array<{ name: string; path: string; icon: string }>>
   ],
 
   TRANSPORT_ADMIN: [
-    { name: 'Dashboard',      path: '/transport/dashboard',       icon: '🏠' },
-    { name: 'Orders',         path: '/transport/orders',          icon: '📦' },
-    { name: 'Fleet Monitor',  path: '/transport/fleet-monitor',   icon: '🗺️' },
-    { name: 'My Trucks',      path: '/transport/trucks',          icon: '🚛' },
-    { name: 'Drivers',        path: '/transport/drivers',         icon: '👥' },
+    { name: 'Dashboard',       path: '/transport/dashboard',              icon: '🏠' },
+    { name: 'Orders',          path: '/transport/orders',                 icon: '📦' },
+    { name: 'Fleet Monitor',   path: '/transport/fleet-monitor',          icon: '🗺️' },
+    { name: 'My Trucks',       path: '/transport/trucks',                 icon: '🚛' },
+    { name: 'Connect Seller',  path: '/transport/trucks/connect-seller',  icon: '🔗' },
+    { name: 'Drivers',         path: '/transport/drivers',                icon: '👥' },
   ],
 
   CLIENT: [
-    { name: 'Dashboard',   path: '/client/dashboard',   icon: '🏠' },
-    { name: 'Place Order', path: '/client/orders/new',  icon: '➕' },
-    { name: 'My Orders',   path: '/client/orders',      icon: '📦' },
+    { name: 'Dashboard',        path: '/client/dashboard',          icon: '🏠' },
+    { name: 'Place Order',      path: '/client/orders/new',         icon: '➕' },
+    { name: 'My Orders',        path: '/client/orders',             icon: '📦' },
+    { name: 'Confirm Delivery', path: '/client/delivery/scan-qr',   icon: '📷' },
+    { name: 'Fuel Stations',    path: '/client/tanks',              icon: '⛽' },
   ],
 
   DRIVER: [
@@ -58,14 +61,13 @@ const ROLE_DOT: Record<UserRole, string> = {
 };
 
 // Nav items that only match their exact path (no prefix matching)
-const EXACT = new Set(['/client/orders/new', '/transport/trucks/register']);
-// Current pathnames that disable all prefix matching (they are "owned" by an EXACT item)
-const EXACT_PAGES = new Set(['/client/orders/new', '/transport/trucks/register']);
+const EXACT = new Set(['/client/orders/new', '/client/orders', '/transport/trucks', '/transport/trucks/register', '/transport/trucks/connect-seller']);
+const EXACT_PAGES = new Set(['/client/orders/new', '/client/delivery/scan-qr', '/transport/trucks/register', '/transport/trucks/connect-seller']);
 
-export default function Sidebar({ userRole }: { userRole: UserRole }) {
+export default function Sidebar({ role }: { role: UserRole }) {
   const router   = useRouter();
   const pathname = usePathname();
-  const items    = nav[userRole] ?? [];
+  const items    = nav[role] ?? [];
 
   function isActive(path: string) {
     if (pathname === path) return true;
@@ -93,8 +95,8 @@ export default function Sidebar({ userRole }: { userRole: UserRole }) {
       {/* Role pill */}
       <div className="px-5 py-3 border-b border-gray-50">
         <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ROLE_DOT[userRole] ?? 'bg-gray-400'}`} />
-          <span className="text-xs font-semibold text-gray-500">{ROLE_LABEL[userRole]}</span>
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ROLE_DOT[role] ?? 'bg-gray-400'}`} />
+          <span className="text-xs font-semibold text-gray-500">{ROLE_LABEL[role]}</span>
         </div>
       </div>
 
@@ -125,7 +127,7 @@ export default function Sidebar({ userRole }: { userRole: UserRole }) {
       {/* Sign out */}
       <div className="p-3 border-t border-gray-100">
         <button
-          onClick={() => { logout(); router.push('/'); }}
+          onClick={() => signOut().then(() => router.push('/'))}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-400 hover:bg-red-50 hover:text-red-500 transition text-sm font-medium"
         >
           <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">

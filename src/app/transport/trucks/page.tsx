@@ -1,1138 +1,329 @@
 'use client';
-
-import { useState, useEffect } from 'react';
-
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-
 import Sidebar from '@/src/components/layout/Sidebar';
-
 import Header from '@/src/components/layout/Header';
+import { getCurrentUser } from '@/src/lib/user-store';
+import { api, type ApiTruck } from '@/src/lib/api';
 
-import StatusBadge from '@/src/components/workflow/StatusBadge';
-
-import ToggleSwitch from '@/src/components/ui/ToggleSwitch';
-
-import {
-
-getCurrentUser,
-
-getTrucks,
-
-updateTruck,
-
-} from '@/src/lib/demo-data';
-
-import { downloadTruckQrPdf, truckQrDataUrl } from '@/src/lib/truck-qr';
+type GeoState  = 'idle' | 'locating' | 'done' | 'error';
+type FuelEntry = { c: [string, string, string, string] };
 
 export default function TransportTrucksPage() {
-
-const router = useRouter();
-
-const [user,setUser] =
-useState<any>(null);
-
-const [mounted,setMounted] =
-useState(false);
-
-const [trucks,setTrucks] =
-useState<any[]>([]);
-
-const [selectedTruck,
-setSelectedTruck] =
-useState<any>(null);
-
-const [showModal,
-setShowModal] =
-useState(false);
-
-const [qrPreview, setQrPreview] = useState<string | null>(null);
-
-const [qrBusy, setQrBusy] = useState(false);
-
-useEffect(()=>{
-
-setMounted(true);
-
-const currentUser =
-getCurrentUser();
-
-if(
-!currentUser
-||
-currentUser.role !==
-'TRANSPORT_ADMIN'
-){
-
-router.push('/');
-
-return;
-
-}
-
-setUser(
-currentUser
-);
-
-loadTrucks(
-currentUser
-);
-
-},[router]);
-
-useEffect(()=>{
-
-if(!user) return;
-
-const interval = setInterval(()=>{
-
-loadTrucks(user);
-
-},3000);
-
-return ()=>clearInterval(interval);
-
-},[user]);
-
-// Generate a live QR preview (encoding the truck ID) whenever the detail modal opens.
-useEffect(()=>{
-
-setQrPreview(null);
-
-if(showModal && selectedTruck){
-
-truckQrDataUrl(selectedTruck).then(setQrPreview).catch(()=>setQrPreview(null));
-
-}
-
-},[showModal, selectedTruck]);
-
-const loadTrucks = (
-currentUser:any
-)=>{
-
-const allTrucks =
-getTrucks();
-
-const myTrucks =
-
-allTrucks.filter(
-(t:any)=>
-
-t.tspId ===
-currentUser.id
-);
-
-setTrucks(
-myTrucks
-);
-
-};
-
-// Enable / disable a truck
-const toggleTruck = (
-truck:any
-)=>{
-
-updateTruck(
-truck.id,
-{ disabled: !truck.disabled }
-);
-
-if(user) loadTrucks(user);
-
-};
-
-const handleRefresh = ()=>{
-
-if(user){
-
-loadTrucks(user);
-
-alert(
-'✅ Trucks refreshed!'
-);
-
-}
-
-};
-
-if(!mounted) return null;
-
-if(
-!user
-||
-user.role !==
-'TRANSPORT_ADMIN'
-){
-
-return null;
-
-}
-
-const totalTrucks =
-trucks.length;
-
-const idleTrucks =
-
-trucks.filter(
-t=>
-
-t.status ===
-'IDLE'
-).length;
-
-const activeTrucks =
-
-trucks.filter(
-t=>
-
-[
-'EN_ROUTE',
-
-'ASSIGNED'
-
-].includes(
-t.status
-)
-).length;
-
-const pendingTrucks =
-
-trucks.filter(
-t=>
-
-[
-'PENDING_SELLER_APPROVAL',
-
-'PENDING_ADMIN_APPROVAL'
-
-].includes(
-t.status
-)
-).length;
-
-return(
-
-<div className="
-flex
-min-h-screen
-bg-gray-50
-">
-
-<Sidebar
-userRole={user.role}
-/>
-
-<div className="flex-1">
-
-<Header user={user}/>
-
-<main className="p-8">
-
-<div className="
-mb-8
-flex
-items-center
-justify-between
-">
-
-<div>
-
-<h1 className="
-text-3xl
-font-bold
-text-gray-900
-mb-2
-">
-
-My Trucks
-
-</h1>
-
-<p className="text-gray-600">
-
-Manage your transporter fleet
-
-</p>
-
-</div>
-
-<div className="flex gap-3">
-
-<button
-onClick={handleRefresh}
-className="
-bg-blue-100
-hover:bg-blue-200
-text-blue-700
-font-medium
-px-4
-py-2
-rounded-lg
-"
->
-
-🔄 Refresh
-
-</button>
-
-<button
-onClick={()=>
-router.push(
-'/transport/trucks/register'
-)
-}
-className="
-bg-blue-600
-hover:bg-blue-700
-text-white
-font-semibold
-px-6
-py-2
-rounded-lg
-"
->
-
-+ Register New Truck
-
-</button>
-
-</div>
-
-</div>
-
-<div className="
-grid
-grid-cols-4
-gap-6
-mb-8
-">
-
-<div className="
-bg-white
-rounded-lg
-p-6
-border
-">
-
-<p className="
-text-sm
-text-gray-600
-mb-1
-">
-
-Total Trucks
-
-</p>
-
-<p className="
-text-3xl
-font-bold
-text-gray-900
-">
-
-{totalTrucks}
-
-</p>
-
-</div>
-
-<div className="
-bg-white
-rounded-lg
-p-6
-border
-">
-
-<p className="
-text-sm
-text-gray-600
-mb-1
-">
-
-Idle
-
-</p>
-
-<p className="
-text-3xl
-font-bold
-text-green-600
-">
-
-{idleTrucks}
-
-</p>
-
-</div>
-
-<div className="
-bg-white
-rounded-lg
-p-6
-border
-">
-
-<p className="
-text-sm
-text-gray-600
-mb-1
-">
-
-Active
-
-</p>
-
-<p className="
-text-3xl
-font-bold
-text-blue-600
-">
-
-{activeTrucks}
-
-</p>
-
-</div>
-
-<div className="
-bg-white
-rounded-lg
-p-6
-border
-">
-
-<p className="
-text-sm
-text-gray-600
-mb-1
-">
-
-Pending Approval
-
-</p>
-
-<p className="
-text-3xl
-font-bold
-text-orange-600
-">
-
-{pendingTrucks}
-
-</p>
-
-</div>
-
-</div>
-
-{
-pendingTrucks > 0
-&&
-
-<div className="
-bg-orange-50
-rounded-lg
-p-4
-mb-6
-border
-border-orange-200
-">
-
-<p className="
-text-orange-800
-font-medium
-">
-
-⚠️
-{' '}
-{pendingTrucks}
-{' '}
-truck(s) waiting for seller/admin approval before QR activation.
-
-</p>
-
-</div>
-}
-
-{
-trucks.length > 0
-
-?
-
-<div className="
-grid
-md:grid-cols-2
-lg:grid-cols-3
-gap-6
-">
-
-{
-trucks.map(
-(truck:any)=>(
-
-<div
-key={truck.id}
-className={`
-bg-white
-rounded-xl
-p-6
-border-2
-transition-all
-cursor-pointer
-${
-truck.disabled
-? 'border-red-200 bg-red-50/40'
-: 'border-gray-200 hover:border-blue-300'
-}
-`}
-onClick={()=>{
-
-setSelectedTruck(
-truck
-);
-
-setShowModal(true);
-
-}}
->
-
-<div className="
-flex
-items-start
-justify-between
-mb-4
-">
-
-<div>
-
-<h3 className="
-text-lg
-font-bold
-text-gray-900
-mb-1
-">
-
-{
-truck.registrationNumber
-}
-
-</h3>
-
-<p className="
-text-xs
-text-gray-500
-">
-
-Seller:
-{' '}
-
-{
-truck.sellerName
-||
-'Pending'
-}
-
-</p>
-
-</div>
-
-{
-truck.disabled
-?
-<span className="
-inline-flex
-items-center
-px-3
-py-1
-rounded-full
-text-xs
-font-medium
-bg-red-100
-text-red-800
-">
-🚫 Disabled
-</span>
-:
-<StatusBadge
-status={truck.status}
-/>
-}
-
-</div>
-
-<div className="
-space-y-2
-text-sm
-mb-4
-">
-
-<p className="text-gray-600">
-
-📦
-{' '}
-{
-truck.compartments?.length || 0
-}
-{' '}
-Compartments
-
-</p>
-
-<p className="text-gray-600">
-
-💧 Capacity:
-{' '}
-
-{
-truck.capacity?.toLocaleString()
-||
-0
-}
-L
-
-</p>
-
-</div>
-
-{
-truck.qrCode
-
-?
-
-<div className="
-bg-green-50
-rounded-lg
-p-3
-border
-border-green-200
-">
-
-<p className="
-text-xs
-text-green-800
-font-medium
-">
-
-✓ QR Code Generated
-
-</p>
-
-<p className="
-text-xs
-text-green-700
-">
-
-Truck ready for deliveries
-
-</p>
-
-<button
-onClick={async (e)=>{ e.stopPropagation(); await downloadTruckQrPdf(truck); }}
-className="mt-2 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-1.5 rounded-lg text-xs transition-colors"
->
-⬇️ Download QR (PDF)
-</button>
-
-</div>
-
-:
-
-<div className="
-bg-orange-50
-rounded-lg
-p-3
-border
-border-orange-200
-">
-
-<p className="
-text-xs
-text-orange-800
-font-medium
-">
-
-⏳ Approval Pending
-
-</p>
-
-<p className="
-text-xs
-text-orange-700
-">
-
-Waiting for seller/admin approval before QR activation
-
-</p>
-
-</div>
-
-}
-
-{/* Enable / disable toggle */}
-
-<div
-className="
-mt-4
-pt-3
-border-t
-flex
-items-center
-justify-between
-"
-onClick={(e)=>e.stopPropagation()}
->
-
-<span className="
-text-xs
-font-medium
-text-gray-500
-">
-{
-truck.disabled
-? 'Truck disabled'
-: 'Truck active'
-}
-</span>
-
-<ToggleSwitch
-size="sm"
-enabled={!truck.disabled}
-onChange={()=>
-toggleTruck(truck)
-}
-/>
-
-</div>
-
-</div>
-
-))
-}
-
-</div>
-
-:
-
-<div className="
-bg-white
-rounded-xl
-p-12
-text-center
-border
-">
-
-<span className="
-text-6xl
-mb-4
-block
-">
-
-🚛
-
-</span>
-
-<h3 className="
-text-xl
-font-semibold
-text-gray-900
-mb-2
-">
-
-No Trucks Registered
-
-</h3>
-
-<p className="
-text-gray-600
-mb-6
-">
-
-Register your first truck
-
-</p>
-
-<button
-onClick={()=>
-router.push(
-'/transport/trucks/register'
-)
-}
-className="
-bg-blue-600
-hover:bg-blue-700
-text-white
-font-semibold
-px-6
-py-3
-rounded-lg
-"
->
-
-+ Register Truck
-
-</button>
-
-</div>
-}
-
-</main>
-
-</div>
-
-{
-showModal
-&&
-selectedTruck
-&&
-
-<div className="
-fixed
-inset-0
-bg-black
-bg-opacity-50
-flex
-items-center
-justify-center
-z-50
-p-4
-">
-
-<div className="
-bg-white
-rounded-xl
-p-6
-max-w-2xl
-w-full
-max-h-[90vh]
-overflow-y-auto
-">
-
-<div className="
-flex
-items-start
-justify-between
-mb-6
-">
-
-<div>
-
-<h2 className="
-text-2xl
-font-bold
-text-gray-900
-mb-1
-">
-
-{
-selectedTruck.registrationNumber
-}
-
-</h2>
-
-<p className="
-text-sm
-text-gray-600
-">
-
-Truck ID:
-{' '}
-{
-selectedTruck.id
-}
-
-</p>
-
-</div>
-
-<button
-onClick={()=>
-setShowModal(false)
-}
-className="
-text-gray-500
-hover:text-gray-700
-text-2xl
-"
->
-
-✕
-
-</button>
-
-</div>
-
-<div className="
-space-y-4
-mb-6
-">
-
-<div className="
-bg-gray-50
-rounded-lg
-p-4
-">
-
-<p className="
-text-sm
-text-gray-600
-mb-2
-">
-
-Status
-
-</p>
-
-<StatusBadge
-status={selectedTruck.status}
-/>
-
-</div>
-
-<div className="
-bg-gray-50
-rounded-lg
-p-4
-">
-
-<p className="
-text-sm
-text-gray-600
-mb-2
-">
-
-Compartments
-(
-{
-selectedTruck.compartments?.length || 0
-}
-)
-
-</p>
-
-{
-selectedTruck.compartments
-&&
-
-selectedTruck.compartments.length > 0
-
-?
-
-<div className="
-space-y-2
-">
-
-{
-selectedTruck.compartments.map(
-(comp:any)=>(
-
-<div
-key={comp.id}
-className="
-flex
-items-center
-justify-between
-bg-white
-p-2
-rounded
-"
->
-
-<span className="
-text-sm
-font-medium
-">
-
-Compartment
-{' '}
-{comp.id}
-
-</span>
-
-<span className="
-text-sm
-text-gray-600
-">
-
-{
-comp.capacity?.toLocaleString()
-}
-L
-•
-{' '}
-{
-comp.fuelType
-}
-
-</span>
-
-</div>
-
-))
-}
-
-</div>
-
-:
-
-<p className="
-text-sm
-text-gray-500
-">
-
-No compartments configured
-
-</p>
-
-}
-
-</div>
-
-<div className="
-bg-gray-50
-rounded-lg
-p-4
-">
-
-<p className="
-text-sm
-text-gray-600
-mb-2
-">
-
-Total Capacity
-
-</p>
-
-<p className="
-text-2xl
-font-bold
-text-blue-600
-">
-
-{
-selectedTruck.capacity?.toLocaleString()
-||
-0
-}
-L
-
-</p>
-
-</div>
-
-{
-selectedTruck.qrCode
-
-?
-
-<div className="
-bg-green-50
-rounded-lg
-p-4
-border
-border-green-200
-">
-
-<p className="
-text-sm
-text-green-800
-font-medium
-mb-2
-">
-
-✓ QR Code Generated
-
-</p>
-
-{qrPreview ? (
-<img
-src={qrPreview}
-alt="Truck QR"
-className="w-48 h-48 mx-auto mt-3 border-2 border-green-300 rounded-lg bg-white"
-/>
-) : (
-<div className="w-48 h-48 mx-auto mt-3 flex items-center justify-center text-xs text-gray-400 border-2 border-dashed border-green-200 rounded-lg">
-Generating QR…
-</div>
-)}
-
-<p className="text-center text-xs text-gray-500 mt-2 font-mono">Encodes truck ID: {selectedTruck.id}</p>
-
-<button
-onClick={async ()=>{ setQrBusy(true); try { await downloadTruckQrPdf(selectedTruck); } finally { setQrBusy(false); } }}
-disabled={qrBusy}
-className="mt-3 w-full bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg text-sm transition-colors"
->
-{qrBusy ? 'Preparing PDF…' : '⬇️ Download QR (PDF)'}
-</button>
-
-</div>
-
-:
-
-<div className="
-bg-orange-50
-rounded-lg
-p-4
-border
-border-orange-200
-">
-
-<p className="
-text-sm
-text-orange-800
-font-medium
-mb-2
-">
-
-⏳ Approval Workflow Active
-
-</p>
-
-<p className="
-text-xs
-text-orange-700
-">
-
-Sensor integration request is under seller/admin approval workflow.
-
-QR code will be generated after final platform approval.
-
-</p>
-
-</div>
-
-}
-
-</div>
-
-<button
-onClick={()=>
-setShowModal(false)
-}
-className="
-w-full
-bg-gray-200
-hover:bg-gray-300
-text-gray-700
-font-medium
-py-3
-rounded-lg
-"
->
-
-Close
-
-</button>
-
-</div>
-
-</div>
-}
-
-</div>
-
-);
-
+  const router = useRouter();
+  const user = getCurrentUser();
+  const [trucks,      setTrucks]      = useState<ApiTruck[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState<string | null>(null);
+  const [qrMap,       setQrMap]       = useState<Record<string, string>>({});
+  const [qrLoading,   setQrLoading]   = useState<Record<string, boolean>>({});
+  const [geoState,    setGeoState]    = useState<Record<string, GeoState>>({});
+  const [geoMsg,      setGeoMsg]      = useState<Record<string, string>>({});
+  const [fuelEntry,   setFuelEntry]   = useState<Record<string, FuelEntry>>({});
+  const [fuelSaving,  setFuelSaving]  = useState<Record<string, boolean>>({});
+  const [fuelMsg,     setFuelMsg]     = useState<Record<string, string>>({});
+
+  const load = useCallback(async () => {
+    try {
+      setTrucks((await api.trucks.list()) ?? []);
+      setError(null);
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to load trucks');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) { router.replace('/auth/login'); return; }
+    load();
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, [load, router, user]);
+
+  const showQR = async (truck: ApiTruck) => {
+    if (qrMap[truck.id]) {
+      setQrMap(m => { const next = { ...m }; delete next[truck.id]; return next; });
+      return;
+    }
+    setQrLoading(m => ({ ...m, [truck.id]: true }));
+    try {
+      const { qr_url } = await api.trucks.getQR(truck.id);
+      setQrMap(m => ({ ...m, [truck.id]: qr_url }));
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to load QR code');
+    } finally {
+      setQrLoading(m => ({ ...m, [truck.id]: false }));
+    }
+  };
+
+  const captureLocation = (truck: ApiTruck) => {
+    if (!navigator.geolocation) {
+      setGeoState(s => ({ ...s, [truck.id]: 'error' }));
+      setGeoMsg(m => ({ ...m, [truck.id]: 'Geolocation not supported by this browser.' }));
+      return;
+    }
+    setGeoState(s => ({ ...s, [truck.id]: 'locating' }));
+    setGeoMsg(m => ({ ...m, [truck.id]: 'Getting location…' }));
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        const { latitude, longitude } = pos.coords;
+        try {
+          await api.trucks.seedPosition(truck.id, latitude, longitude);
+          setGeoState(s => ({ ...s, [truck.id]: 'done' }));
+          setGeoMsg(m => ({ ...m, [truck.id]: `${latitude.toFixed(5)}, ${longitude.toFixed(5)}` }));
+          load();
+        } catch (e: any) {
+          setGeoState(s => ({ ...s, [truck.id]: 'error' }));
+          setGeoMsg(m => ({ ...m, [truck.id]: e.message ?? 'Failed to save location' }));
+        }
+      },
+      err => {
+        setGeoState(s => ({ ...s, [truck.id]: 'error' }));
+        setGeoMsg(m => ({ ...m, [truck.id]: err.message ?? 'Location access denied' }));
+      },
+      { enableHighAccuracy: true, timeout: 10_000 }
+    );
+  };
+
+  const openFuelForm = (truckId: string) => {
+    const existing = trucks.find(t => t.id === truckId);
+    setFuelEntry(m => ({
+      ...m,
+      [truckId]: {
+        c: [
+          String(existing?.compartment_fuel?.['1'] ?? ''),
+          String(existing?.compartment_fuel?.['2'] ?? ''),
+          String(existing?.compartment_fuel?.['3'] ?? ''),
+          String(existing?.compartment_fuel?.['4'] ?? ''),
+        ] as [string, string, string, string],
+      },
+    }));
+  };
+
+  const saveFuel = async (truckId: string) => {
+    const entry = fuelEntry[truckId];
+    if (!entry) return;
+    const compartmentFuel: Record<string, number> = {};
+    entry.c.forEach((v, i) => {
+      const n = parseFloat(v);
+      if (!isNaN(n) && n >= 0) compartmentFuel[String(i + 1)] = n;
+    });
+    setFuelSaving(m => ({ ...m, [truckId]: true }));
+    setFuelMsg(m => ({ ...m, [truckId]: '' }));
+    try {
+      await api.trucks.setFuel(truckId, compartmentFuel);
+      setFuelEntry(m => { const next = { ...m }; delete next[truckId]; return next; });
+      setFuelMsg(m => ({ ...m, [truckId]: '✓ Saved' }));
+      await load();
+    } catch (e: any) {
+      setFuelMsg(m => ({ ...m, [truckId]: `✗ ${e.message ?? 'Failed'}` }));
+    } finally {
+      setFuelSaving(m => ({ ...m, [truckId]: false }));
+    }
+  };
+
+  if (!user) return null;
+
+  return (
+    <div className="flex h-screen bg-gray-50">
+      <Sidebar role="TRANSPORT_ADMIN" />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <Header title="Fleet" user={user} />
+        <main className="flex-1 overflow-y-auto p-6">
+          <div className="flex items-center justify-between mb-6">
+            <p className="text-sm text-gray-500">{trucks.length} truck{trucks.length !== 1 ? 's' : ''} in fleet</p>
+            <button
+              onClick={() => router.push('/transport/trucks/register')}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
+            >
+              + Register Truck
+            </button>
+          </div>
+
+          {loading && <p className="text-gray-500">Loading...</p>}
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <p className="text-red-700 text-sm">{error}</p>
+            </div>
+          )}
+
+          {!loading && !error && (
+            trucks.length === 0 ? (
+              <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+                <p className="text-gray-500 mb-4">No trucks registered yet.</p>
+                <button
+                  onClick={() => router.push('/transport/trucks/register')}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition-colors"
+                >
+                  Register your first truck
+                </button>
+              </div>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {trucks.map((truck) => (
+                  <div key={truck.id} className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">
+
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-xs text-slate-400 mb-0.5">Device ID</p>
+                        <h3 className="font-bold text-gray-900 font-mono text-sm">{truck.device_id}</h3>
+                      </div>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        truck.status === 'IDLE'     ? 'bg-green-100 text-green-700' :
+                        truck.status === 'EN_ROUTE' ? 'bg-blue-100 text-blue-700'  :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {truck.status}
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-400 font-mono break-all">ID: {truck.id}</p>
+
+                    {/* Location status */}
+                    {truck.latitude != null ? (
+                      <div className="flex items-center gap-1.5 text-[11px] text-teal-700 bg-teal-50 rounded-lg px-2.5 py-1.5">
+                        <span>📍</span>
+                        <span className="font-mono">{truck.latitude.toFixed(5)}, {truck.longitude!.toFixed(5)}</span>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-slate-400 bg-slate-50 rounded-lg px-2.5 py-1.5">
+                        No location yet
+                      </div>
+                    )}
+
+                    {/* Compartment fuel — vertical bars, 9100 L capacity each */}
+                    {(() => {
+                      const CAP = 9100;
+                      const totalLoaded = [1,2,3,4].reduce((s,i) => s + (truck.compartment_fuel?.[String(i)] ?? 0), 0);
+                      const colors = ['bg-blue-500','bg-cyan-400','bg-teal-500','bg-sky-500'];
+                      const rings  = ['ring-blue-300','ring-cyan-300','ring-teal-300','ring-sky-300'];
+                      return (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Fuel Compartments</p>
+                            {!fuelEntry[truck.id] && (
+                              <button onClick={() => openFuelForm(truck.id)} className="text-[10px] text-blue-600 hover:underline font-medium">Update</button>
+                            )}
+                          </div>
+
+                          {fuelEntry[truck.id] ? (
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
+                              <div className="grid grid-cols-4 gap-1.5">
+                                {(['C1','C2','C3','C4'] as const).map((label, i) => (
+                                  <div key={label} className="space-y-0.5">
+                                    <label className="text-[9px] font-semibold text-slate-500 uppercase">{label}</label>
+                                    <input
+                                      type="number" min="0" max={CAP} step="100" placeholder="0"
+                                      value={fuelEntry[truck.id].c[i]}
+                                      onChange={e => {
+                                        const next: [string,string,string,string] = [...fuelEntry[truck.id].c] as [string,string,string,string];
+                                        next[i] = e.target.value;
+                                        setFuelEntry(m => ({ ...m, [truck.id]: { c: next } }));
+                                      }}
+                                      className="w-full text-xs border border-slate-200 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] text-slate-500">
+                                  Total: <strong>{fuelEntry[truck.id].c.reduce((s,v) => s + (parseFloat(v)||0), 0).toLocaleString()} L</strong>
+                                  <span className="text-slate-400"> / {(CAP*4).toLocaleString()} L</span>
+                                </span>
+                                <div className="flex gap-1.5">
+                                  <button onClick={() => setFuelEntry(m => { const n={...m}; delete n[truck.id]; return n; })} className="text-[10px] px-2 py-1 rounded border border-slate-200 text-slate-500 hover:bg-slate-50">Cancel</button>
+                                  <button onClick={() => saveFuel(truck.id)} disabled={fuelSaving[truck.id]} className="text-[10px] font-semibold px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+                                    {fuelSaving[truck.id] ? 'Saving…' : 'Save'}
+                                  </button>
+                                </div>
+                              </div>
+                              {fuelMsg[truck.id] && <p className={`text-[10px] ${fuelMsg[truck.id].startsWith('✓') ? 'text-teal-600' : 'text-red-500'}`}>{fuelMsg[truck.id]}</p>}
+                            </div>
+                          ) : (
+                            <>
+                              {/* Vertical bars */}
+                              <div className="flex gap-2">
+                                {[1,2,3,4].map(i => {
+                                  const liters = truck.compartment_fuel?.[String(i)] ?? 0;
+                                  const pct    = Math.min(100, (liters / CAP) * 100);
+                                  const isEmpty = liters === 0;
+                                  return (
+                                    <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                                      <span className="text-[9px] font-bold text-slate-500">C{i}</span>
+                                      <div className={`relative w-full rounded-md overflow-hidden ring-1 ${rings[i-1]} bg-slate-100`} style={{height: 80}}>
+                                        <div
+                                          className={`absolute bottom-0 w-full transition-all duration-700 ${isEmpty ? 'bg-slate-200' : colors[i-1]}`}
+                                          style={{height: `${Math.max(pct, isEmpty ? 100 : 2)}%`, opacity: isEmpty ? 0.4 : 1}}
+                                        />
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                          <span className={`text-[10px] font-bold drop-shadow-sm ${isEmpty ? 'text-slate-400' : 'text-white'}`}>
+                                            {isEmpty ? '—' : pct < 1 ? `${pct.toFixed(1)}%` : `${pct.toFixed(0)}%`}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <span className="text-[9px] font-semibold text-slate-700 font-mono">{liters.toLocaleString()} L</span>
+                                      <span className="text-[8px] text-slate-400">/ {CAP.toLocaleString()} L</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              {/* Summary row */}
+                              <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                                <span className="text-[10px] text-slate-500">Total loaded</span>
+                                <span className="text-[10px] font-bold text-slate-700">
+                                  {totalLoaded.toLocaleString()} L
+                                  <span className="font-normal text-slate-400"> / {(CAP*4).toLocaleString()} L</span>
+                                </span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Capture Location */}
+                    <button
+                      onClick={() => captureLocation(truck)}
+                      disabled={geoState[truck.id] === 'locating'}
+                      className={`w-full text-xs font-semibold py-2 rounded-lg border transition-colors disabled:opacity-50 ${
+                        geoState[truck.id] === 'done'    ? 'border-teal-300 bg-teal-50 text-teal-700' :
+                        geoState[truck.id] === 'error'   ? 'border-red-300 bg-red-50 text-red-600'    :
+                        'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {geoState[truck.id] === 'locating' ? '⏳ Locating…'           :
+                       geoState[truck.id] === 'done'     ? `✓ ${geoMsg[truck.id]}` :
+                       geoState[truck.id] === 'error'    ? `✗ ${geoMsg[truck.id]}` :
+                       '📍 Capture Current Location'}
+                    </button>
+
+                    {/* QR */}
+                    <button
+                      onClick={() => showQR(truck)}
+                      disabled={qrLoading[truck.id]}
+                      className="w-full text-xs font-semibold py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {qrLoading[truck.id] ? 'Loading QR…' : qrMap[truck.id] ? 'Hide QR' : 'Show QR Code'}
+                    </button>
+
+                    {qrMap[truck.id] && (
+                      <div className="text-center space-y-2">
+                        <img
+                          src={qrMap[truck.id]}
+                          alt={`QR code for truck ${truck.device_id}`}
+                          className="w-40 h-40 mx-auto border border-slate-200 rounded-lg"
+                        />
+                        <p className="text-[10px] text-slate-400">Show this QR to the client at delivery</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+        </main>
+      </div>
+    </div>
+  );
 }

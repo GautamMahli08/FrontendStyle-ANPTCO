@@ -4,265 +4,176 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getTrucks, getOrders, shortOrderId } from '@/src/lib/demo-data';
+import { getCurrentUser } from '@/src/lib/user-store';
+import { api, type ApiOrder, type ApiTruck } from '@/src/lib/api';
 
 const STATUS_COLOR: Record<string, string> = {
-  ASSIGNED_TO_TSP: 'bg-yellow-100 text-yellow-700',
-  ASSIGNED:        'bg-indigo-100 text-indigo-700',
-  EN_ROUTE:        'bg-blue-100   text-blue-700',
-  ARRIVED:         'bg-teal-100   text-teal-700',
-  COMPLETED:       'bg-emerald-100 text-emerald-700',
+  PLACED:             'bg-yellow-100 text-yellow-700',
+  ACCEPTED_BY_SELLER: 'bg-purple-100 text-purple-700',
+  ASSIGNED_TO_TSP:    'bg-amber-100  text-amber-700',
+  ASSIGNED:           'bg-indigo-100 text-indigo-700',
+  EN_ROUTE:           'bg-blue-100   text-blue-700',
+  ARRIVED:            'bg-teal-100   text-teal-700',
+  COMPLETED:          'bg-emerald-100 text-emerald-700',
+  CANCELLED:          'bg-red-100    text-red-700',
 };
 
-function fuelSummary(order: any): string {
-  if (order.fuelItems?.length > 1) {
-    return order.fuelItems.map((f: any) => `${f.volume.toLocaleString()}L ${f.fuelType}`).join(' + ');
-  }
-  return `${order.volume?.toLocaleString()}L ${order.fuelType}`;
-}
+const TRUCK_STATUS_COLOR: Record<string, string> = {
+  ACTIVE:   'bg-emerald-100 text-emerald-700',
+  EN_ROUTE: 'bg-blue-100   text-blue-700',
+  LOADING:  'bg-amber-100  text-amber-700',
+  LOADED:   'bg-indigo-100 text-indigo-700',
+  ARRIVED:  'bg-teal-100   text-teal-700',
+  INACTIVE: 'bg-slate-100  text-slate-500',
+};
 
 export default function TransportDashboard() {
-  const router   = useRouter();
-  const [user,    setUser]    = useState<any>(null);
-  const [trucks,  setTrucks]  = useState<any[]>([]);
-  const [orders,  setOrders]  = useState<any[]>([]);
-  const [mounted, setMounted] = useState(false);
+  const router = useRouter();
+  const user   = getCurrentUser();
 
-  const load = useCallback((u: any) => {
-    setTrucks(getTrucks().filter((t: any) => t.tspId === u.id));
-    setOrders(getOrders().filter((o: any) => o.assignedTSPId === u.id));
+  const [orders,  setOrders]  = useState<ApiOrder[]>([]);
+  const [trucks,  setTrucks]  = useState<ApiTruck[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [o, t] = await Promise.all([api.orders.list(), api.trucks.list()]);
+      setOrders(o);
+      setTrucks(t);
+      setError(null);
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to load data');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    setMounted(true);
-    const u = getCurrentUser();
-    if (!u || u.role !== 'TRANSPORT_ADMIN') { router.push('/'); return; }
-    setUser(u);
-    load(u);
-    const iv = setInterval(() => load(u), 4000);
-    return () => clearInterval(iv);
-  }, [router, load]);
+    if (!user) { router.replace('/auth/login'); return; }
+    load();
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, [load, router, user]);
 
-  if (!mounted || !user) return null;
+  const assignable = orders.filter(o => o.status === 'ASSIGNED_TO_TSP');
+  const active     = orders.filter(o => ['ASSIGNED','LOADING','LOADED','EN_ROUTE','ARRIVED'].includes(o.status));
+  const completed  = orders.filter(o => o.status === 'COMPLETED').length;
+  const activeTrucks = trucks.filter(t => t.status !== 'INACTIVE' && t.status !== 'ACTIVE');
 
-  const needsTruck  = orders.filter(o => o.status === 'ASSIGNED_TO_TSP');
-  const active      = orders.filter(o => ['ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(o.status));
-  const done        = orders.filter(o => o.status === 'COMPLETED');
-  const idleTrucks  = trucks.filter(t => t.status === 'IDLE');
-  const enRoute     = trucks.filter(t => t.status === 'EN_ROUTE');
+  if (!user) return null;
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
-      <Sidebar userRole={user.role} />
-      <div className="flex-1 min-w-0">
-        <Header user={user} />
+    <div className="flex h-screen bg-gray-50">
+      <Sidebar role="TRANSPORT_ADMIN" />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <Header title="Transport Dashboard" user={user} />
+        <main className="flex-1 overflow-y-auto p-6 space-y-6">
 
-        <main className="p-6 space-y-6">
-
-          {/* Page header */}
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-0.5">Transport Portal · {user.companyName}</p>
-              <h1 className="text-2xl font-black text-gray-900">{user.firstName} {user.lastName}</h1>
-              <p className="text-sm text-gray-500 mt-0.5">Assign trucks, manage your fleet and track deliveries</p>
-            </div>
-            <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-4 py-2.5 shadow-sm">
-              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-              <span className="text-sm font-semibold text-gray-700">Telemetry Live</span>
-            </div>
-          </div>
-
-          {/* Action banner — orders waiting for a truck (mirrors the client's Scan-QR card) */}
-          {needsTruck.length > 0 && (
-            <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-5 flex items-center gap-4 shadow-sm">
-              <div className="w-11 h-11 bg-amber-500 rounded-xl flex items-center justify-center text-xl flex-shrink-0 text-white">🚛</div>
-              <div className="flex-1 min-w-0">
-                <p className="font-black text-amber-800">
-                  {needsTruck.length} order{needsTruck.length > 1 ? 's' : ''} waiting for a truck
-                </p>
-                <p className="text-amber-700 text-sm mt-0.5 truncate">
-                  #{shortOrderId(needsTruck[0].id)} · {fuelSummary(needsTruck[0])} → {needsTruck[0].destinationName}
-                  {needsTruck.length > 1 ? ` · +${needsTruck.length - 1} more` : ''}
-                </p>
-              </div>
-              <button
-                onClick={() => router.push('/transport/orders')}
-                className="bg-amber-600 hover:bg-amber-700 text-white font-black px-5 py-2.5 rounded-xl text-sm transition flex-shrink-0"
-              >
-                Review &amp; Assign
-              </button>
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">
+              {error} — <button onClick={load} className="underline">retry</button>
             </div>
           )}
 
-          {/* KPIs */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <Kpi label="Need Truck"        value={needsTruck.length}  color="amber"  badge={needsTruck.length > 0}  onClick={() => router.push('/transport/orders')} />
-            <Kpi label="Active Deliveries" value={active.length}      color="blue"   onClick={() => router.push('/transport/orders')} />
-            <Kpi label="Idle Trucks"       value={idleTrucks.length}  color="green" />
-            <Kpi label="Completed"         value={done.length}        color="slate" />
+          {/* Stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: 'Fleet Size',       value: trucks.length,       color: 'text-blue-600'    },
+              { label: 'Trucks Active',    value: activeTrucks.length, color: 'text-amber-600'   },
+              { label: 'Needs Assignment', value: assignable.length,   color: 'text-yellow-600'  },
+              { label: 'Completed',        value: completed,           color: 'text-emerald-600' },
+            ].map(s => (
+              <div key={s.label} className="bg-white rounded-xl border border-slate-200 p-4">
+                <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+                <p className="text-xs text-slate-500 mt-0.5">{s.label}</p>
+              </div>
+            ))}
           </div>
 
-          {/* Two-column: Orders + Action Required */}
-          <div className="grid lg:grid-cols-3 gap-5">
-
-            {/* Active Orders — 2/3 */}
-            <div className="lg:col-span-2 bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-                <h2 className="font-bold text-gray-900 text-sm">Orders</h2>
-                <button onClick={() => router.push('/transport/orders')} className="text-xs text-blue-600 hover:text-blue-700 font-semibold transition">
-                  Manage All
-                </button>
+          {/* Orders needing truck assignment */}
+          {assignable.length > 0 && (
+            <div className="bg-white rounded-xl border border-amber-200">
+              <div className="px-5 py-3.5 border-b border-amber-100 flex items-center gap-2">
+                <span className="text-amber-600">🚛</span>
+                <h2 className="font-semibold text-slate-800 text-sm">Needs Truck Assignment ({assignable.length})</h2>
               </div>
-              <div className="divide-y divide-gray-50">
-                {needsTruck.length === 0 && active.length === 0 ? (
-                  <div className="px-5 py-10 text-center">
-                    <p className="text-3xl mb-2">📦</p>
-                    <p className="text-sm text-gray-400">No orders assigned yet.</p>
-                  </div>
-                ) : (
-                  [...needsTruck, ...active].slice(0, 7).map(order => (
-                    <div key={order.id} className={`flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50 transition ${order.status === 'ASSIGNED_TO_TSP' ? 'bg-yellow-50/40' : ''}`}>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="font-semibold text-gray-900 text-sm">#{shortOrderId(order.id)}</p>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                            {order.status.replace(/_/g, ' ')}
-                          </span>
-                        </div>
-                        <p className="text-xs text-gray-400 mt-0.5 truncate">{fuelSummary(order)} · {order.destinationName}</p>
-                      </div>
-                      {order.assignedTruckRegistration && (
-                        <p className="text-xs text-gray-500 flex-shrink-0 font-medium">{order.assignedTruckRegistration}</p>
-                      )}
+              <div className="divide-y divide-slate-100">
+                {assignable.map(order => (
+                  <div key={order.id} className="px-5 py-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">#{order.id.slice(-6).toUpperCase()}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {order.volume_liters != null && `${order.volume_liters.toLocaleString()} L`}
+                        {order.fuel_type && ` · ${order.fuel_type}`}
+                      </p>
                     </div>
-                  ))
-                )}
+                    <button
+                      onClick={() => router.push(`/transport/orders?orderId=${order.id}`)}
+                      className="text-xs font-semibold px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700"
+                    >
+                      Assign Truck
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
+          )}
 
-            {/* Action Required — 1/3 */}
-            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="px-5 py-4 border-b border-gray-100">
-                <h2 className="font-bold text-gray-900 text-sm">Action Required</h2>
-                <p className="text-xs text-gray-400 mt-0.5">What needs your attention now</p>
-              </div>
-
-              <div className="divide-y divide-gray-50">
-                <ActionItem
-                  step={1}
-                  title={needsTruck.length > 0 ? `${needsTruck.length} order${needsTruck.length > 1 ? 's' : ''} need a truck assigned` : 'No orders pending assignment'}
-                  desc="Assign a truck and driver for each new order"
-                  urgent={needsTruck.length > 0}
-                  onClick={() => router.push('/transport/orders')}
-                  cta="Assign Trucks"
-                  done={needsTruck.length === 0}
-                />
-
-                <ActionItem
-                  step={2}
-                  title={enRoute.length > 0 ? `${enRoute.length} truck${enRoute.length > 1 ? 's' : ''} currently en route` : 'No trucks on the road'}
-                  desc="Monitor live progress from the orders page"
-                  urgent={false}
-                  onClick={() => router.push('/transport/orders')}
-                  cta="View Deliveries"
-                  done={enRoute.length === 0 && active.length === 0}
-                />
-
-                {idleTrucks.length === 0 && trucks.length > 0 && (
-                  <ActionItem
-                    step={3}
-                    title="All trucks currently on assignment"
-                    desc="No idle trucks available for new orders"
-                    urgent={false}
-                    onClick={() => router.push('/transport/trucks')}
-                    cta="View Fleet"
-                    done={false}
-                  />
-                )}
-
-                {needsTruck.length === 0 && enRoute.length === 0 && (
-                  <div className="px-5 py-8 text-center">
-                    <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                      </svg>
-                    </div>
-                    <p className="text-sm font-semibold text-gray-700">All caught up</p>
-                    <p className="text-xs text-gray-400 mt-0.5">No pending actions right now</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Idle fleet summary */}
-              {idleTrucks.length > 0 && (
-                <div className="mx-3 mb-3 border border-emerald-100 bg-emerald-50 rounded-xl p-3">
-                  <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest mb-2">Ready to Deploy</p>
-                  <div className="space-y-1.5">
-                    {idleTrucks.slice(0, 3).map((t: any) => (
-                      <div key={t.id} className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full flex-shrink-0" />
-                        <p className="text-xs font-semibold text-emerald-800 truncate">{t.registrationNumber}</p>
-                        <span className="text-[10px] text-emerald-500 ml-auto flex-shrink-0">IDLE</span>
-                      </div>
-                    ))}
-                    {idleTrucks.length > 3 && (
-                      <p className="text-[11px] text-emerald-500">+{idleTrucks.length - 3} more</p>
-                    )}
-                  </div>
-                </div>
-              )}
+          {/* Active deliveries */}
+          <div className="bg-white rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
+              <h2 className="font-semibold text-slate-800 text-sm">Active Deliveries</h2>
+              <button onClick={() => router.push('/transport/orders')} className="text-xs text-blue-600 hover:underline">View all</button>
             </div>
+            {loading ? (
+              <div className="p-8 flex justify-center">
+                <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : active.length === 0 ? (
+              <p className="p-8 text-center text-slate-400 text-sm">No active deliveries.</p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {active.map(order => (
+                  <div key={order.id} className="px-5 py-3.5 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">#{order.id.slice(-6).toUpperCase()}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {order.volume_liters != null && `${order.volume_liters.toLocaleString()} L`}
+                        {order.fuel_type && ` · ${order.fuel_type}`}
+                      </p>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_COLOR[order.status] ?? 'bg-slate-100 text-slate-600'}`}>
+                      {order.status.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
+          {/* Fleet */}
+          <div className="bg-white rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
+              <h2 className="font-semibold text-slate-800 text-sm">Fleet</h2>
+              <button onClick={() => router.push('/transport/trucks')} className="text-xs text-blue-600 hover:underline">Manage</button>
+            </div>
+            {trucks.length === 0 ? (
+              <p className="p-8 text-center text-slate-400 text-sm">No trucks registered yet.</p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {trucks.map(truck => (
+                  <div key={truck.id} className="px-5 py-3.5 flex items-center justify-between">
+                    <p className="text-sm font-medium text-slate-700">{truck.device_id}</p>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${TRUCK_STATUS_COLOR[truck.status] ?? 'bg-slate-100 text-slate-600'}`}>
+                      {truck.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </main>
-      </div>
-    </div>
-  );
-}
-
-function Kpi({ label, value, color, badge, onClick }: {
-  label: string; value: number; color: string; badge?: boolean; onClick?: () => void;
-}) {
-  const c: Record<string, { card: string; num: string }> = {
-    amber: { card: 'border-amber-200  bg-amber-50',    num: 'text-amber-700'   },
-    blue:  { card: 'border-blue-200   bg-blue-50',     num: 'text-blue-700'    },
-    green: { card: 'border-emerald-200 bg-emerald-50', num: 'text-emerald-700' },
-    slate: { card: 'border-slate-200  bg-slate-50',    num: 'text-slate-600'   },
-  };
-  const style = c[color] ?? { card: 'border-gray-200 bg-gray-50', num: 'text-gray-700' };
-  return (
-    <button
-      onClick={onClick}
-      className={`relative flex flex-col items-start p-4 rounded-2xl border-2 ${style.card} transition ${onClick ? 'hover:shadow-md cursor-pointer' : 'cursor-default'}`}
-    >
-      {badge && <span className="absolute top-3 right-3 w-2 h-2 bg-red-500 rounded-full animate-pulse" />}
-      <p className={`text-3xl font-black ${style.num}`}>{value}</p>
-      <p className="text-xs font-semibold text-gray-500 mt-1 leading-tight">{label}</p>
-    </button>
-  );
-}
-
-function ActionItem({ step, title, desc, urgent, onClick, cta, done }: {
-  step: number; title: string; desc: string; urgent: boolean;
-  onClick: () => void; cta: string; done: boolean;
-}) {
-  return (
-    <div className={`px-5 py-4 ${urgent ? 'bg-amber-50/50' : ''}`}>
-      <div className="flex items-start gap-3">
-        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-black flex-shrink-0 mt-0.5 ${
-          done ? 'bg-emerald-100 text-emerald-600' : urgent ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-400'
-        }`}>
-          {done ? '✓' : step}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className={`text-sm font-bold leading-tight ${urgent ? 'text-gray-900' : 'text-gray-400'}`}>{title}</p>
-          <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
-          {(urgent || (!done && step === 2)) && (
-            <button onClick={onClick} className="mt-2 text-xs font-bold text-blue-600 hover:text-blue-700 transition">
-              {cta}
-            </button>
-          )}
-        </div>
       </div>
     </div>
   );

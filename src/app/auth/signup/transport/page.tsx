@@ -2,16 +2,6 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-
-addUser,
-
-setCurrentUser,
-
-findUserByEmail,
-
-} from '@/src/lib/demo-data';
-import { User } from '@/src/types';
 
 export default function TransportSignup() {
   const router = useRouter();
@@ -23,11 +13,9 @@ export default function TransportSignup() {
     password: '',
     companyName: '',
     phone: '',
-    sellerCode:'',
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,75 +26,19 @@ export default function TransportSignup() {
         setError('Please fill in all fields');
         return;
       }
-
-      if (findUserByEmail(formData.email)) {
-        setError('Email already registered');
-        return;
-      }
-
       setStep(2);
       return;
     }
 
     if (step === 2) {
-
-      if (
-
-!formData.companyName
-
-||
-
-!formData.phone
-
-)
- {
+      if (!formData.companyName || !formData.phone) {
         setError('Please fill in all fields');
         return;
       }
-
       setLoading(true);
-
-      // Create user
-      const userId = `transport-${Date.now()}`;
-
-      const newUser: User = {
-        id: userId,
-        email: formData.email,
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        role: 'TRANSPORT_ADMIN',
-        verified: true,
-      };
-
-      addUser(newUser);
-
-// get saved user
-const savedUser =
-findUserByEmail(
-formData.email
-);
-
-if(!savedUser){
-
-setError(
-'Failed to create account'
-);
-
-setLoading(false);
-
-return;
-
-}
-
-
-
-setCurrentUser(
-savedUser
-);
-
+      // Registration is handled server-side; move to success screen
       setLoading(false);
       setStep(3);
-
       setTimeout(() => {
         router.push('/transport/dashboard');
       }, 2000);
@@ -164,7 +96,7 @@ savedUser
             </div>
             <span className="ml-2 font-medium">Personal</span>
           </div>
-          <div className={`w-16 h-1 mx-2 ${step >= 2 ? 'bg-green-600' : 'bg-gray-300'}`}></div>
+          <div className={`w-16 h-1 mx-2 ${step >= 2 ? 'bg-green-600' : 'bg-gray-300'}`} />
           <div className={`flex items-center ${step >= 2 ? 'text-green-600' : 'text-gray-400'}`}>
             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${step >= 2 ? 'bg-green-600 text-white' : 'bg-gray-300'}`}>
               2
@@ -178,9 +110,7 @@ savedUser
             <>
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    First Name *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">First Name *</label>
                   <input
                     type="text"
                     value={formData.firstName}
@@ -191,9 +121,7 @@ savedUser
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Last Name *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Last Name *</label>
                   <input
                     type="text"
                     value={formData.lastName}
@@ -206,9 +134,7 @@ savedUser
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email Address *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Email Address *</label>
                 <input
                   type="email"
                   value={formData.email}
@@ -220,9 +146,7 @@ savedUser
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Password *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Password *</label>
                 <input
                   type="password"
                   value={formData.password}
@@ -239,9 +163,7 @@ savedUser
           {step === 2 && (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Transport Company Name *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Transport Company Name *</label>
                 <input
                   type="text"
                   value={formData.companyName}
@@ -253,9 +175,7 @@ savedUser
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Phone Number *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
                 <input
                   type="tel"
                   value={formData.phone}
@@ -268,9 +188,6 @@ savedUser
 
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
                 <h4 className="font-semibold text-yellow-900 mb-2">📋 Important</h4>
-                <p className="text-sm text-yellow-800">
-                  After registration, you'll need to:
-                </p>
                 <ul className="text-sm text-yellow-800 list-disc list-inside mt-2 space-y-1">
                   <li>Upload KYC documents (licenses, permits)</li>
                   <li>Wait for seller approval</li>

@@ -1,245 +1,165 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useRef, Suspense, useCallback } from 'react';
+import dynamic from 'next/dynamic';
+import { useRouter, useSearchParams } from 'next/navigation';
+import jsQR from 'jsqr';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders, getTrucks, updateOrder, updateTruck, addNotification, shortOrderId } from '@/src/lib/demo-data';
-import { qrMatchesTruck } from '@/src/lib/truck-qr';
-import { logDemoEvent } from '@/src/app/client/dashboard/page';
-import CompartmentFuel from '@/src/components/fleet/CompartmentFuel';
+import { getCurrentUser } from '@/src/lib/user-store';
+import { api, type ApiOrder, type ApiTruckPosition } from '@/src/lib/api';
 
-type Stage = 'idle' | 'camera' | 'review' | 'processing' | 'confirmed' | 'rejected';
+const TruckMap = dynamic(() => import('@/src/components/TruckMap'), { ssr: false });
 
-export default function ScanQRPage() {
-  const router = useRouter();
-  const [user,      setUser]      = useState<any>(null);
-  const [order,     setOrder]     = useState<any>(null);
-  const [truck,     setTruck]     = useState<any>(null);
-  const [mounted,   setMounted]   = useState(false);
-  const [stage,     setStage]     = useState<Stage>('idle');
-  const [camError,  setCamError]  = useState<string | null>(null);
-  const [scanHint,  setScanHint]  = useState('Point camera at the QR code on the truck');
-  const [rejecting,    setRejecting]    = useState(false);
-  const [rejectReason, setRejectReason] = useState('');
+function ScanQRContent() {
+  const router       = useRouter();
+  const searchParams = useSearchParams();
+  const paramOrderId = searchParams.get('orderId') ?? '';
+  const user         = getCurrentUser();
 
-  const videoRef    = useRef<HTMLVideoElement>(null);
-  const canvasRef   = useRef<HTMLCanvasElement>(null);
-  const streamRef   = useRef<MediaStream | null>(null);
-  const rafRef      = useRef<number | null>(null);
+  const videoRef  = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const rafRef    = useRef<number>(0);
 
-  const load = useCallback((u: any) => {
-    const arrived = getOrders().find(o => o.clientId === u.id && o.status === 'ARRIVED');
-    setOrder(arrived ?? null);
-    if (arrived?.assignedTruckId) {
-      setTruck(getTrucks().find(t => t.id === arrived.assignedTruckId) ?? null);
+  const [arrivedOrders,  setArrivedOrders]  = useState<ApiOrder[]>([]);
+  const [order,          setOrder]          = useState<ApiOrder | null>(null);
+  const [scanning,       setScanning]       = useState(false);
+  const [cameraError,    setCameraError]    = useState<string | null>(null);
+  const [scannedTruckId, setScannedTruckId] = useState<string | null>(null);
+  const [truckPosition,  setTruckPosition]  = useState<ApiTruckPosition | null>(null);
+  const [manualTruckId,  setManualTruckId]  = useState('');
+  const [confirming,     setConfirming]     = useState(false);
+  const [done,           setDone]           = useState(false);
+  const [error,          setError]          = useState<string | null>(null);
+  const [loading,        setLoading]        = useState(true);
+
+  // Load orders on mount
+  useEffect(() => {
+    if (!user) { router.replace('/auth/login'); return; }
+
+    if (paramOrderId) {
+      api.orders.get(paramOrderId)
+        .then(o => { setOrder(o); setLoading(false); })
+        .catch(e => { setError(e.message ?? 'Failed to load order'); setLoading(false); });
+    } else {
+      api.orders.list()
+        .then(orders => {
+          const arrived = orders.filter(o => o.status === 'ARRIVED');
+          setArrivedOrders(arrived);
+          if (arrived.length === 1) setOrder(arrived[0]);
+          setLoading(false);
+        })
+        .catch(e => { setError(e.message ?? 'Failed to load orders'); setLoading(false); });
+    }
+  }, [paramOrderId, router, user]);
+
+  // Cleanup camera on unmount
+  useEffect(() => {
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      streamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const stopCamera = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    setScanning(false);
+  }, []);
+
+  const handleScannedValue = useCallback(async (raw: string) => {
+    // Extract UUID from raw value (QR may encode a URL containing the truck UUID)
+    const uuidMatch = raw.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    const truckId   = uuidMatch ? uuidMatch[0] : raw.trim();
+    setScannedTruckId(truckId);
+    try {
+      const pos = await api.trucks.getPosition(truckId);
+      setTruckPosition(pos);
+    } catch {
+      setTruckPosition(null);
     }
   }, []);
 
-  useEffect(() => {
-    setMounted(true);
-    const u = getCurrentUser();
-    if (!u || u.role !== 'CLIENT') { router.push('/'); return; }
-    setUser(u);
-    load(u);
-  }, [router, load]);
-
-  // Stop camera when unmounting or leaving camera stage
-  useEffect(() => {
-    return () => stopCamera();
-  }, []);
-
-  function stopCamera() {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-  }
-
-  // ── Open camera ───────────────────────────────────────────────
-  async function openCamera() {
-    setCamError(null);
-    setStage('camera');
+  const startCamera = useCallback(async () => {
+    setCameraError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: 'environment' },
       });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
-        scanLoop();
       }
+      setScanning(true);
+
+      const tick = () => {
+        const video  = videoRef.current;
+        const canvas = canvasRef.current;
+        if (!video || !canvas || video.readyState < 2) {
+          rafRef.current = requestAnimationFrame(tick);
+          return;
+        }
+        canvas.width  = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { rafRef.current = requestAnimationFrame(tick); return; }
+        ctx.drawImage(video, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code      = jsQR(imageData.data, imageData.width, imageData.height);
+        if (code?.data) {
+          stopCamera();
+          handleScannedValue(code.data);
+        } else {
+          rafRef.current = requestAnimationFrame(tick);
+        }
+      };
+      tick();
     } catch {
-      setCamError('Camera permission denied. Please allow camera access and try again.');
-      setStage('idle');
+      setCameraError('Camera not available — use manual entry below.');
     }
-  }
+  }, [handleScannedValue, stopCamera]);
 
-  // ── Continuous QR scan loop ───────────────────────────────────
-  function scanLoop() {
-    const video  = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas || !streamRef.current) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    canvas.width  = video.videoWidth  || 640;
-    canvas.height = video.videoHeight || 480;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-    // Dynamically import jsQR to avoid SSR issues
-    import('jsqr').then(({ default: jsQR }) => {
-      const code = jsQR(imageData.data, imageData.width, imageData.height);
-      if (code?.data) {
-        handleQRFound(code.data);
-      } else {
-        rafRef.current = requestAnimationFrame(scanLoop);
-      }
-    }).catch(() => {
-      rafRef.current = requestAnimationFrame(scanLoop);
-    });
-  }
-
-  // ── QR code detected ─────────────────────────────────────────
-  function handleQRFound(qrData: string) {
-    const assignedId = order?.assignedTruckId ?? truck?.id ?? '';
-
-    // The QR encodes the truck's ID — it must match THIS order's assigned truck.
-    if (qrMatchesTruck(qrData, { id: assignedId })) {
+  const confirm = async (truckId: string) => {
+    if (!order) return;
+    setConfirming(true);
+    setError(null);
+    try {
+      await api.orders.scan(order.id, truckId);
       stopCamera();
-      setScanHint('✓ Truck verified');
-      // Truck is verified — show the per-compartment fuel status so the client
-      // can review what's being delivered before accepting or rejecting.
-      setStage('review');
-      return;
+      setDone(true);
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to confirm delivery');
+    } finally {
+      setConfirming(false);
     }
+  };
 
-    // A decoded code that is not our truck → real mismatch. Stop and report it
-    // without revealing the assigned truck's identity.
-    stopCamera();
-    setCamError(
-      `❌ This QR code doesn't match your delivery. Please scan the QR code on the truck for this order.`
-    );
-    setStage('idle');
-  }
+  const resetScan = () => {
+    setScannedTruckId(null);
+    setTruckPosition(null);
+    setManualTruckId('');
+  };
 
-  // ── Confirm delivery ──────────────────────────────────────────
-  function confirmDelivery() {
-    if (!order) return;
-    setStage('processing');
-    setTimeout(() => {
-      updateOrder(order.id, { status: 'COMPLETED', completedAt: new Date() });
-      if (order.assignedTruckId) updateTruck(order.assignedTruckId, { status: 'IDLE' });
+  if (!user) return null;
 
-      logDemoEvent(
-        user?.id ?? 'client',
-        'DELIVERY_CONFIRMED',
-        `orderId=${order.id} | truck=${truck?.registrationNumber} | qrCode=${truck?.qrCode}`
-      );
-
-      if (order.assignedDriverId) {
-        addNotification({
-          id: `notif-${Date.now()}-d`, userId: order.assignedDriverId,
-          type: 'DELIVERY_COMPLETED', title: '✅ Delivery Accepted',
-          message: `Client accepted delivery for order #${shortOrderId(order.id)}. Return to depot.`,
-          read: false, createdAt: new Date(),
-        });
-      }
-      addNotification({
-        id: `notif-${Date.now()}-s`, userId: 'seller-001',
-        type: 'DELIVERY_COMPLETED', title: '✅ Order Completed',
-        message: `Order #${shortOrderId(order.id)} delivered to ${order.destinationName}.`,
-        read: false, createdAt: new Date(),
-      });
-      if (order.assignedTSPId) {
-        addNotification({
-          id: `notif-${Date.now()}-t`, userId: order.assignedTSPId,
-          type: 'DELIVERY_COMPLETED', title: '✅ Order Completed',
-          message: `Order #${shortOrderId(order.id)} successfully delivered.`,
-          read: false, createdAt: new Date(),
-        });
-      }
-      setStage('confirmed');
-    }, 800);
-  }
-
-  // ── Reject delivery ───────────────────────────────────────────
-  function rejectDelivery() {
-    if (!order) return;
-    const reason = rejectReason.trim();
-
-    updateOrder(order.id, {
-      status: 'DELIVERY_REJECTED',
-      rejectedAt: new Date(),
-      rejectionReason: reason || undefined,
-    });
-    // Truck keeps its fuel and returns to the depot.
-    if (order.assignedTruckId) updateTruck(order.assignedTruckId, { status: 'RETURNING' });
-
-    logDemoEvent(
-      user?.id ?? 'client',
-      'DELIVERY_REJECTED',
-      `orderId=${order.id} | truck=${truck?.registrationNumber} | reason=${reason || 'n/a'}`
-    );
-
-    const reasonLine = reason ? ` Reason: ${reason}` : '';
-    if (order.assignedDriverId) {
-      addNotification({
-        id: `notif-${Date.now()}-d`, userId: order.assignedDriverId,
-        type: 'DELIVERY_REJECTED', title: '⛔ Delivery Rejected',
-        message: `Client rejected delivery for order #${shortOrderId(order.id)}.${reasonLine} Return fuel to depot.`,
-        read: false, createdAt: new Date(),
-      });
-    }
-    addNotification({
-      id: `notif-${Date.now()}-s`, userId: 'seller-001',
-      type: 'DELIVERY_REJECTED', title: '⛔ Delivery Rejected',
-      message: `Order #${shortOrderId(order.id)} was rejected by ${order.destinationName ?? 'the client'}.${reasonLine}`,
-      read: false, createdAt: new Date(),
-    });
-    if (order.assignedTSPId) {
-      addNotification({
-        id: `notif-${Date.now()}-t`, userId: order.assignedTSPId,
-        type: 'DELIVERY_REJECTED', title: '⛔ Delivery Rejected',
-        message: `Order #${shortOrderId(order.id)} was rejected on arrival.${reasonLine}`,
-        read: false, createdAt: new Date(),
-      });
-    }
-    setStage('rejected');
-  }
-
-  if (!mounted || !user) return null;
-
-  // ── Confirmed ─────────────────────────────────────────────────
-  if (stage === 'confirmed') {
+  // ── Done screen ──────────────────────────────────────────────
+  if (done) {
     return (
-      <div className="flex min-h-screen bg-slate-50">
-        <Sidebar userRole={user.role} />
-        <div className="flex-1 min-w-0">
-          <Header user={user} />
-          <main className="p-6 flex items-center justify-center min-h-[70vh]">
-            <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center max-w-md w-full shadow-lg">
-              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-5">
-                <svg className="w-10 h-10 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <h2 className="text-2xl font-black text-gray-900 mb-2">Delivery Confirmed</h2>
-              <p className="text-gray-500 text-sm mb-1">Order #{shortOrderId(order?.id)} completed.</p>
-              <p className="text-gray-400 text-xs mb-1">
-                {order?.volume?.toLocaleString()}L {order?.fuelType} received
-              </p>
-              <p className="text-gray-400 text-xs mb-8">
-                📧 A delivery confirmation has been sent to <span className="font-semibold text-gray-500">{user.email}</span>
-              </p>
-              <button
-                onClick={() => router.push('/client/orders')}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition"
-              >
-                Back to My Orders
+      <div className="flex h-screen bg-gray-50">
+        <Sidebar role="CLIENT" />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <Header title="Delivery Confirmed" user={user} />
+          <main className="flex-1 flex items-center justify-center p-6">
+            <div className="text-center max-w-sm">
+              <div className="text-5xl mb-4">🎉</div>
+              <h2 className="text-xl font-bold text-slate-800 mb-2">Delivery Complete!</h2>
+              <p className="text-slate-500 text-sm mb-6">Your fuel has been delivered and confirmed.</p>
+              <button onClick={() => router.push('/client/orders')}
+                className="px-6 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">
+                View Orders
               </button>
             </div>
           </main>
@@ -248,278 +168,242 @@ export default function ScanQRPage() {
     );
   }
 
-  // ── Rejected ──────────────────────────────────────────────────
-  if (stage === 'rejected') {
-    return (
-      <div className="flex min-h-screen bg-slate-50">
-        <Sidebar userRole={user.role} />
-        <div className="flex-1 min-w-0">
-          <Header user={user} />
-          <main className="p-6 flex items-center justify-center min-h-[70vh]">
-            <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center max-w-md w-full shadow-lg">
-              <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-5">
-                <svg className="w-10 h-10 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </div>
-              <h2 className="text-2xl font-black text-gray-900 mb-2">Delivery Rejected</h2>
-              <p className="text-gray-500 text-sm mb-1">Order #{shortOrderId(order?.id)} was rejected.</p>
-              {rejectReason.trim() && (
-                <p className="text-gray-400 text-xs mb-2">Reason: {rejectReason.trim()}</p>
-              )}
-              <p className="text-gray-400 text-xs mb-8">
-                The transporter has been notified to return the fuel to the depot.
-              </p>
-              <button
-                onClick={() => router.push('/client/orders')}
-                className="w-full bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 rounded-xl transition"
-              >
-                Back to My Orders
-              </button>
-            </div>
-          </main>
-        </div>
-      </div>
-    );
-  }
-
-  // ── No order ──────────────────────────────────────────────────
-  if (!order) {
-    return (
-      <div className="flex min-h-screen bg-slate-50">
-        <Sidebar userRole={user.role} />
-        <div className="flex-1 min-w-0">
-          <Header user={user} />
-          <main className="p-6 flex items-center justify-center min-h-[70vh]">
-            <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center max-w-md shadow-sm">
-              <p className="text-4xl mb-3">📦</p>
-              <p className="font-bold text-gray-900 mb-1">No delivery to scan</p>
-              <p className="text-sm text-gray-500 mb-5">This page activates when your truck has arrived at your location.</p>
-              <button onClick={() => router.push('/client/orders')} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition">
-                View My Orders
-              </button>
-            </div>
-          </main>
-        </div>
-      </div>
-    );
-  }
-
+  // ── Main page ────────────────────────────────────────────────
   return (
-    <div className="flex min-h-screen bg-slate-50">
-      <Sidebar userRole={user.role} />
-      <div className="flex-1 min-w-0">
-        <Header user={user} />
-        <main className="p-6">
-          <div className="max-w-lg mx-auto space-y-5">
+    <div className="flex h-screen bg-gray-50">
+      <Sidebar role="CLIENT" />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <Header title="Confirm Delivery" user={user} />
+        <main className="flex-1 overflow-y-auto p-6">
+          <div className="max-w-md mx-auto space-y-4">
 
-            <div>
-              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-0.5">Delivery Confirmation</p>
-              <h1 className="text-2xl font-black text-gray-900">Scan QR Code</h1>
-              <p className="text-sm text-gray-500 mt-0.5">Verify the truck and confirm receipt of fuel</p>
-            </div>
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">{error}</div>
+            )}
 
-            {/* Order details */}
-            <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <p className="text-xs text-gray-400">Order</p>
-                  <p className="font-bold text-gray-900">#{shortOrderId(order.id)}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400">Fuel</p>
-                  <p className="font-bold text-gray-900">{order.volume?.toLocaleString()}L {order.fuelType}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400">Destination</p>
-                  <p className="font-bold text-gray-900">{order.destinationName ?? '—'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400">Status</p>
-                  <p className="font-bold text-emerald-600">
-                    {stage === 'review' ? 'Verified — review fuel' : 'Arrived — awaiting scan'}
-                  </p>
+            {loading && (
+              <div className="text-center py-12 text-slate-400 text-sm">Loading…</div>
+            )}
+
+            {/* Empty state */}
+            {!loading && !order && arrivedOrders.length === 0 && (
+              <div className="bg-white rounded-xl border border-dashed border-slate-300 p-10 text-center">
+                <div className="text-3xl mb-3">📦</div>
+                <p className="text-slate-600 font-semibold mb-1">No deliveries in progress</p>
+                <p className="text-slate-400 text-sm">Orders appear here once the truck arrives at your station.</p>
+              </div>
+            )}
+
+            {/* Order picker */}
+            {!loading && !order && arrivedOrders.length > 1 && (
+              <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+                <h3 className="font-semibold text-slate-800">Select order to confirm</h3>
+                <div className="space-y-2">
+                  {arrivedOrders.map(o => (
+                    <button key={o.id} onClick={() => setOrder(o)}
+                      className="w-full text-left px-4 py-3 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors">
+                      <p className="font-semibold text-sm text-slate-800">#{o.id.slice(-6).toUpperCase()}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {o.volume_liters?.toLocaleString()} L · {o.fuel_type}
+                      </p>
+                    </button>
+                  ))}
                 </div>
               </div>
-            </div>
+            )}
 
-            {/* Camera / Scanner area */}
-            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-
-              {/* Camera view */}
-              {stage === 'camera' && (
-                <div className="relative bg-black">
-                  <video
-                    ref={videoRef}
-                    className="w-full max-h-72 object-cover"
-                    playsInline
-                    muted
-                  />
-                  {/* Scan overlay */}
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    {/* Dimmed surround */}
-                    <div className="absolute inset-0 bg-black/40" />
-                    {/* Viewfinder box */}
-                    <div className="relative w-52 h-52 z-10">
-                      {/* Corner brackets */}
-                      {[
-                        'top-0 left-0 border-t-4 border-l-4 rounded-tl-lg',
-                        'top-0 right-0 border-t-4 border-r-4 rounded-tr-lg',
-                        'bottom-0 left-0 border-b-4 border-l-4 rounded-bl-lg',
-                        'bottom-0 right-0 border-b-4 border-r-4 rounded-br-lg',
-                      ].map((cls, i) => (
-                        <div key={i} className={`absolute w-8 h-8 border-white ${cls}`} />
-                      ))}
-                      {/* Scan line */}
-                      <div className="absolute inset-x-0 h-0.5 bg-blue-400 opacity-90 animate-scanline" />
-                    </div>
-                  </div>
-                  {/* Hint */}
-                  <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent px-4 py-3 text-center">
-                    <p className="text-white text-sm font-medium">{scanHint}</p>
-                  </div>
+            {/* Order selected */}
+            {order && (
+              <>
+                {/* Order summary card */}
+                <div className="bg-white rounded-xl border border-slate-200 p-5">
+                  <p className="text-xs text-slate-500 mb-1">Confirming delivery for</p>
+                  <p className="font-bold text-slate-800">#{order.id.slice(-6).toUpperCase()}</p>
+                  {order.volume_liters != null && (
+                    <p className="text-sm text-slate-600 mt-1">{order.volume_liters.toLocaleString()} L · {order.fuel_type}</p>
+                  )}
+                  {arrivedOrders.length > 1 && (
+                    <button onClick={() => { setOrder(null); resetScan(); }}
+                      className="text-xs text-blue-600 mt-2 hover:underline">
+                      ← Choose different order
+                    </button>
+                  )}
                 </div>
-              )}
 
-              {/* Processing state */}
-              {stage === 'processing' && (
-                <div className="flex flex-col items-center justify-center py-16 gap-4">
-                  <div className="w-14 h-14 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-                  <p className="text-sm font-semibold text-gray-700">Confirming delivery…</p>
-                  <p className="text-xs text-gray-400">Updating order</p>
-                </div>
-              )}
+                {/* Camera scanner (shown before scan) */}
+                {!scannedTruckId && (
+                  <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+                    <p className="text-sm font-semibold text-slate-700">Scan QR Code on the Truck</p>
 
-              {/* Review state — verified truck, inspect fuel, accept or reject */}
-              {stage === 'review' && (
-                <div className="p-5 space-y-4">
-                  {/* Verified banner */}
-                  <div className="flex items-center gap-2.5 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
-                    <span className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                      <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                      </svg>
-                    </span>
-                    <div>
-                      <p className="text-sm font-bold text-emerald-800">Truck verified</p>
-                      <p className="text-xs text-emerald-600">{truck?.registrationNumber} matched your order</p>
+                    {/* Viewfinder */}
+                    <div className="relative bg-black rounded-xl overflow-hidden" style={{ aspectRatio: '1' }}>
+                      <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+                      <canvas ref={canvasRef} className="hidden" />
+
+                      {/* Idle overlay */}
+                      {!scanning && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/60">
+                          <span className="text-4xl">📷</span>
+                          <button onClick={startCamera}
+                            className="px-5 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700">
+                            Start Camera
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Scanning reticle */}
+                      {scanning && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <div className="relative w-52 h-52">
+                            <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-teal-400 rounded-tl-lg" />
+                            <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-teal-400 rounded-tr-lg" />
+                            <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-teal-400 rounded-bl-lg" />
+                            <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-teal-400 rounded-br-lg" />
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
 
-                  {/* Per-compartment fuel status (same readout as Fleet Monitoring) */}
-                  <div className="border border-gray-200 rounded-xl p-3">
-                    <CompartmentFuel order={order} />
-                  </div>
+                    {scanning && (
+                      <button onClick={stopCamera}
+                        className="w-full py-2 text-sm text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50">
+                        Cancel Scan
+                      </button>
+                    )}
 
-                  <p className="text-xs text-gray-500 text-center">
-                    Review the fuel delivered in each compartment, then accept or reject this delivery.
-                  </p>
+                    {cameraError && (
+                      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                        {cameraError}
+                      </p>
+                    )}
 
-                  {/* Optional rejection reason */}
-                  {rejecting && (
-                    <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2">
-                      <label className="block text-xs font-semibold text-red-700">
-                        Reason for rejection (optional)
-                      </label>
-                      <textarea
-                        value={rejectReason}
-                        onChange={(e) => setRejectReason(e.target.value)}
-                        rows={2}
-                        placeholder="e.g. Volume short, wrong fuel type, contamination…"
-                        className="w-full text-sm border border-red-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-300 focus:outline-none resize-none"
+                    {/* Divider */}
+                    <div className="relative">
+                      <div className="absolute inset-0 flex items-center">
+                        <div className="w-full border-t border-slate-100" />
+                      </div>
+                      <div className="relative flex justify-center">
+                        <span className="text-xs text-slate-400 bg-white px-2">or enter manually</span>
+                      </div>
+                    </div>
+
+                    {/* Manual entry */}
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={manualTruckId}
+                        onChange={e => setManualTruckId(e.target.value)}
+                        placeholder="Paste truck UUID…"
+                        className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                       />
-                    </div>
-                  )}
-
-                  {/* Actions */}
-                  {!rejecting ? (
-                    <div className="grid grid-cols-2 gap-3">
                       <button
-                        onClick={() => setRejecting(true)}
-                        className="border border-red-300 text-red-700 font-bold py-3 rounded-xl text-sm hover:bg-red-50 transition"
+                        onClick={() => handleScannedValue(manualTruckId)}
+                        disabled={!manualTruckId.trim()}
+                        className="px-3 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-semibold hover:bg-slate-200 disabled:opacity-40"
                       >
-                        Reject
-                      </button>
-                      <button
-                        onClick={confirmDelivery}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm transition"
-                      >
-                        Accept Delivery
+                        Use
                       </button>
                     </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        onClick={() => { setRejecting(false); setRejectReason(''); }}
-                        className="border border-gray-200 text-gray-600 font-semibold py-3 rounded-xl text-sm hover:bg-gray-50 transition"
-                      >
-                        Back
-                      </button>
-                      <button
-                        onClick={rejectDelivery}
-                        className="bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl text-sm transition"
-                      >
-                        Confirm Rejection
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Idle state — prompt to open camera */}
-              {stage === 'idle' && (
-                <div className="p-8 text-center">
-                  {/* Scan icon */}
-                  <div className="w-20 h-20 mx-auto mb-5 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center">
-                    <svg className="w-10 h-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6.75 6.75h.75v.75h-.75v-.75zM6.75 16.5h.75v.75h-.75v-.75zM16.5 6.75h.75v.75h-.75v-.75zM13.5 13.5h.75v.75h-.75v-.75zM13.5 19.5h.75v.75h-.75v-.75zM19.5 13.5h.75v.75h-.75v-.75zM19.5 19.5h.75v.75h-.75v-.75zM16.5 16.5h.75v.75h-.75v-.75z" />
-                    </svg>
                   </div>
+                )}
 
-                  <p className="font-bold text-gray-900 mb-1 text-sm">Verify your delivery</p>
-                  <p className="text-xs text-gray-400 mb-6 max-w-xs mx-auto">
-                    Point your camera at the QR code on the arriving truck. We&apos;ll automatically check it matches your order before confirming receipt.
-                  </p>
-
-                  {camError && (
-                    <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 mb-4 text-sm text-red-700">
-                      {camError}
+                {/* Scanned result + fuel info */}
+                {scannedTruckId && (
+                  <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-green-600 text-xl">✓</span>
+                      <p className="text-sm font-semibold text-slate-700">Truck Identified</p>
                     </div>
-                  )}
+                    <p className="text-[11px] font-mono text-slate-500 break-all bg-slate-50 rounded-lg px-3 py-2">
+                      {scannedTruckId}
+                    </p>
 
-                  <button
-                    onClick={openCamera}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl transition flex items-center justify-center gap-2.5"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                    Open Camera to Scan
-                  </button>
-                </div>
-              )}
+                    {/* Fuel summary */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-blue-50 rounded-xl p-3">
+                        <p className="text-xs text-blue-600 font-semibold mb-1">Your Order</p>
+                        <p className="text-xl font-bold text-blue-800">
+                          {order.volume_liters != null ? order.volume_liters.toLocaleString() : '—'} L
+                        </p>
+                        <p className="text-xs text-blue-500 mt-0.5">{order.fuel_type ?? 'Fuel'}</p>
+                      </div>
+                      <div className="bg-teal-50 rounded-xl p-3">
+                        <p className="text-xs text-teal-600 font-semibold mb-1">Truck On Board</p>
+                        <p className="text-xl font-bold text-teal-800">
+                          {truckPosition?.total_fuel_liters != null
+                            ? Number(truckPosition.total_fuel_liters).toLocaleString()
+                            : 'N/A'} L
+                        </p>
+                        <p className="text-xs text-teal-500 mt-0.5">Total fuel</p>
+                      </div>
+                    </div>
 
-              {/* Cancel button while the camera scans continuously */}
-              {stage === 'camera' && (
-                <div className="p-4">
-                  <button
-                    onClick={() => { stopCamera(); setStage('idle'); }}
-                    className="w-full border border-gray-200 text-gray-600 font-semibold py-3 rounded-xl text-sm hover:bg-gray-50 transition"
-                  >
+                    {/* Compartment breakdown */}
+                    {truckPosition?.compartment_fuel &&
+                      Object.keys(truckPosition.compartment_fuel).length > 0 && (
+                      <div className="bg-slate-50 rounded-lg p-3 space-y-1.5">
+                        <p className="text-xs font-semibold text-slate-600 mb-2">Compartments</p>
+                        {Object.entries(truckPosition.compartment_fuel).map(([k, v]) => (
+                          <div key={k} className="flex justify-between text-xs text-slate-600">
+                            <span>{k}</span>
+                            <span className="font-mono font-semibold">{Number(v).toLocaleString()} L</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Truck location map */}
+                    {truckPosition?.latitude != null && truckPosition?.longitude != null ? (
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-semibold text-slate-600">Truck Location</p>
+                        <TruckMap
+                          lat={truckPosition.latitude}
+                          lng={truckPosition.longitude}
+                          label={`Truck · ${truckPosition.latitude.toFixed(5)}, ${truckPosition.longitude.toFixed(5)}`}
+                        />
+                        <p className="text-[11px] text-slate-400 text-center">
+                          {truckPosition.latitude.toFixed(5)}, {truckPosition.longitude.toFixed(5)}
+                          {truckPosition.speed != null && ` · ${truckPosition.speed} km/h`}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-400 text-center py-1">Truck location not available</p>
+                    )}
+
+                    <button
+                      onClick={() => confirm(scannedTruckId)}
+                      disabled={confirming}
+                      className="w-full py-3 rounded-lg bg-teal-600 text-white font-semibold text-sm hover:bg-teal-700 disabled:opacity-50"
+                    >
+                      {confirming ? 'Confirming…' : 'Confirm Delivery'}
+                    </button>
+
+                    <button onClick={resetScan}
+                      className="w-full py-2 text-sm text-slate-400 hover:text-slate-600 hover:underline">
+                      Scan again
+                    </button>
+                  </div>
+                )}
+
+                {!scannedTruckId && (
+                  <button onClick={() => router.back()}
+                    className="w-full py-2.5 rounded-lg border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50">
                     Cancel
                   </button>
-                </div>
-              )}
-            </div>
-
-            {/* Hidden canvas for frame processing */}
-            <canvas ref={canvasRef} className="hidden" />
-
+                )}
+              </>
+            )}
           </div>
         </main>
       </div>
     </div>
+  );
+}
+
+export default function ScanQRPage() {
+  return (
+    <Suspense>
+      <ScanQRContent />
+    </Suspense>
   );
 }
