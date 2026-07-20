@@ -1,0 +1,11 @@
+node_modules/
+*.zip
+bootstrap
+.env
+.env.local
+.next/
+dist/
+build/
+*.log
+.aws-sam/
+samconfig.toml

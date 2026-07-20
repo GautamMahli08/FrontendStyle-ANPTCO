@@ -1,0 +1,28 @@
+Account	                    Password
+
+deepakmahli123@gmail.com	Temp1234! - seller
+admin@anptco.com	        Admin@12345!  - Admin
+
+
+
+{
+    "level": "info",
+    "ts": "2026-06-26T07:47:52.552Z",
+    "caller": "ingestion/handler.go:44",
+    "msg": "raw payload",
+    "body": "[{\"bluetooth.sensor.value.5\":-21474836.48,\"engine.ignition.status\
+    ":true,\"position.latitude\":23.518558,\"position.longitude\":58.214033,\"timestamp\
+    ":1782460071}]"
+}
+
+
+
+ERP KEY
+dk_0c3ace17c992c9d0a674c518cfabf3fc496295211ea8252947b2560b5890e860
+
+bluetooth.sensor.value.5
+
+
+
+
+https://sp0knxes4d.execute-api.ap-south-1.amazonaws.com/ingest/telemetry

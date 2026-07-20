@@ -1,0 +1,188 @@
+Architecture Review: Order vs Trip Separation
+What the codebase actually does today
+The platform has one entity that does two jobs: the orders table is simultaneously the commercial workflow record (marketplace: placed → accepted → assigned) and the physical trip record (monitoring: en_route → arrived → completed). There is no separate Trip. The monitoring engine talks directly to orders and order_assignments.
+
+Specifically:
+
+Concern	Where it lives today
+Commercial workflow	orders.status (PLACED → ACCEPTED_BY_SELLER → ASSIGNED_TO_TSP → ASSIGNED)
+Physical journey	orders.status (LOADING → LOADED → EN_ROUTE → ARRIVED → DELIVERY_ACCEPTED → COMPLETED)
+Truck assignment	order_assignments table
+Trip completion	order_assignments.status = JOURNEY_COMPLETE + orders.status = COMPLETED
+Destination coordinates	orders.destination_station_id → FK into geofences.ref_id
+Active-trip lookup	FindActiveOrderForTruck: JOINs order_assignments → orders → geofences
+State machine driver	geofence/service.go → calls orders.AdvanceToArrived, CompleteAssignment, TryComplete
+The geofence service already isolates its order dependency behind a three-method interface (repository.OrderRepository in the geofence package: AdvanceToArrived, CompleteAssignment, TryComplete). That interface is the future TripRepository — it just hasn't been named that yet.
+
+What already matches the proposed architecture
+These pieces are complete and need zero changes:
+
+Sensor ingestion lambda — already decoupled from orders entirely
+GPS live state and telemetry
+Truck management (CRUD, QR, KYC)
+Geofence zone management (depot, station CRUD)
+Authentication and workspace isolation (RLS)
+Seller ↔ transporter connections
+Onboarding flows
+The geofence/service.go detection logic itself — it is already written against an interface, not a concrete table
+Where the design is tightly coupled today
+Coupling 1 — Destination coordinates live on the order, not the trip
+
+FindActiveOrderForTruck (in repository/postgres/geofence.go) does:
+
+
+JOIN geofences g ON g.ref_id = o.destination_station_id AND g.type = 'STATION'
+This means the destination is a CLIENT-owned geofences row created in Mode A. Mode B clients provide raw lat/lng — there is no client workspace and no pre-existing station geofence for them.
+
+Coupling 2 — The monitoring engine mutates the orders table directly
+
+AdvanceToArrived, CompleteAssignment, TryComplete all UPDATE orders and order_assignments. In Mode B there are no orders, so these calls have nothing to target.
+
+Coupling 3 — Trip completion is encoded in order_assignments.status
+
+order_assignments serves as both the "which truck is on which order" record (assignment step) and the "did the truck return to depot" record (journey complete step). These are different life-cycle concerns fused into one row.
+
+Coupling 4 — geofence_events.order_id
+
+Every geofence event currently carries order_id. In Mode B there is no order. This field would be NULL for dispatch-created trips, which is valid but loses the linkage.
+
+Coupling 5 — The commercial and physical status enums share one column
+
+OrderStatus has both PLACED / ACCEPTED_BY_SELLER (commercial) and EN_ROUTE / ARRIVED (physical) in one column. A client of Mode B would never see the commercial statuses, but they still live in the same type.
+
+Proposed architecture
+New entity: trips
+This is the unit the monitoring engine runs on. It can be created two ways (Mode A: from an order; Mode B: from the Dispatch API).
+
+Proposed schema:
+
+
+CREATE TABLE trips (
+    id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id      UUID        NOT NULL REFERENCES workspaces(id),
+    truck_id          UUID        NOT NULL REFERENCES trucks(id),
+    order_id          UUID        REFERENCES orders(id),     -- NULL for Mode B
+    order_ref         TEXT,                                  -- external ref for Mode B
+    driver_name       TEXT,
+    origin_name       TEXT,
+    origin_lat        DOUBLE PRECISION,
+    origin_lng        DOUBLE PRECISION,
+    dest_name         TEXT        NOT NULL,
+    dest_lat          DOUBLE PRECISION NOT NULL,
+    dest_lng          DOUBLE PRECISION NOT NULL,
+    dest_geofence_id  UUID        REFERENCES geofences(id),  -- resolved at creation
+    status            TEXT        NOT NULL DEFAULT 'LOADING',
+    compartments      JSONB,      -- expected: [{"index":1,"fuel_type":"DIESEL","expected_volume":9100}]
+    fuel_loaded       JSONB,      -- actual at departure (from sensors)
+    fuel_delivered    JSONB,      -- actual at delivery (from sensors)
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+trip.status carries the physical lifecycle only: LOADING → LOADED → EN_ROUTE → ARRIVED → DELIVERY_ACCEPTED → COMPLETED.
+
+orders.status keeps its commercial + physical statuses for backward compatibility with existing Mode A clients, and the two are kept in sync during Phase 1.
+
+How Order relates to Trip
+
+Order (commercial, optional)         Trip (physical, always required)
+─────────────────────────────        ─────────────────────────────────
+PLACED                               (not yet created)
+ACCEPTED_BY_SELLER                   (not yet created)
+ASSIGNED_TO_TSP                      (not yet created)
+ASSIGNED                             (not yet created)
+LOADING          ──────creates──▶    LOADING
+LOADED                               LOADED
+EN_ROUTE                             EN_ROUTE
+ARRIVED                              ARRIVED
+DELIVERY_ACCEPTED                    DELIVERY_ACCEPTED
+COMPLETED        ◀──synced back──    COMPLETED
+Mode A: handleDepart in orders.go creates the Trip row when advancing LOADED → EN_ROUTE (or we can create it at finish-loading). The order's destination station geofence becomes trips.dest_geofence_id.
+
+Mode B: Dispatch API creates the Trip directly. No order row exists.
+
+Dispatch API
+
+POST /v1/trips/dispatch
+Authorization: Bearer <token>    -- TRANSPORT_ADMIN or machine API key
+Body:
+
+
+{
+  "order_ref": "SO-48817",
+  "truck_id": "uuid",
+  "driver": "Ahmed K.",
+  "origin": { "name": "Depot", "lat": 23.67, "lng": 58.19 },
+  "destination": { "name": "Station A", "lat": 23.61, "lng": 58.50 },
+  "compartments": [
+    { "index": 1, "fuel_type": "DIESEL", "expected_volume": 9100 },
+    { "index": 2, "fuel_type": "DIESEL", "expected_volume": 9100 }
+  ]
+}
+Creates: a trips row + a geofences row (type=STATION) for the destination. Returns { "trip_id": "uuid", "status": "LOADING" }.
+
+The truck must already exist in our system. The API validates truck_id belongs to the caller's workspace before creating the trip.
+
+Module flags
+Add a modules JSONB column to workspaces:
+
+
+ALTER TABLE workspaces
+  ADD COLUMN modules JSONB NOT NULL
+  DEFAULT '{"ordering": true, "dispatch_api": false}';
+In handler.go, after extracting auth, load the workspace once and gate:
+
+All /v1/orders/* endpoints: require modules.ordering == true
+POST /v1/trips/dispatch: require modules.dispatch_api == true
+All other routes: unchanged
+The workspace record is already fetched in some flows; add a lightweight cache if the per-request overhead is a concern.
+
+Migration path (3 phases, backward-compatible)
+Phase 1 — Add Trip entity, no external behavior change
+This phase has zero impact on existing clients.
+
+Add trips table (migration).
+In core-api/api/orders.go, handleDepart (LOADED → EN_ROUTE): also write a trips row populated from the order's fields. Destination lat/lng come from looking up the geofence row via destination_station_id.
+Change the geofence service's FindActiveOrderForTruck query to read from trips (WHERE truck_id = $1 AND status IN ('EN_ROUTE', 'ARRIVED', 'DELIVERY_ACCEPTED')). The ActiveOrderAssignment type becomes ActiveTrip — same shape, same fields, different source table.
+Change AdvanceToArrived, CompleteAssignment, TryComplete in the geofence service's repository to target trips instead of orders/order_assignments. Also update orders.status in the same transaction (two writes) so existing Mode A client queries on orders continue to work.
+geofence_events: add a trip_id column alongside order_id. For Mode A trips, both are set. Existing queries on order_id continue to work.
+Result: monitoring engine runs on trips. The orders table is updated in parallel as a projection for backward compat. Zero API changes.
+
+Phase 2 — Dispatch API + module flags
+Add modules JSONB to workspaces.
+Add POST /v1/trips/dispatch to core-api/api/handler.go. New file core-api/internal/api/trips.go.
+Add GET /v1/trips and GET /v1/trips/{id} for TRANSPORT_ADMIN to view incoming dispatches.
+Frontend: read modules from the workspace (add to login response or a /v1/me endpoint). Pass it through the user store. Sidebar renders ordering menu items only if modules.ordering == true.
+For Mode B trips (no order_id), AdvanceToArrived and TryComplete only touch trips. The sync back to orders is skipped (no order row exists).
+Phase 3 — Cleanup (future, after Mode B clients onboarded)
+Remove the orders.status sync writes from the geofence service (they become dead code once all clients have migrated).
+Trim OrderStatus enum in the core-api to only commercial statuses (PLACED through LOADED). The physical statuses live on TripStatus only.
+Optionally retire order_assignments.status = JOURNEY_COMPLETE — the trip record itself now carries completion.
+Which modules need changes (summary)
+Module	Change	Risk
+trips table (new)	Add via migration	Low — additive
+location-geofence-service/repository/postgres/geofence.go	FindActiveOrderForTruck query targets trips	Medium — central query, must be tested
+location-geofence-service/repository/postgres/order.go	Targets trips + syncs orders in Phase 1	Medium
+core-api/api/orders.go — handleDepart	Also creates a trips row	Low
+core-api/api/trips.go (new)	Dispatch API	Low — additive
+core-api/api/handler.go	New routes + module gate	Low
+workspaces table	Add modules JSONB	Low — additive, default preserves existing behavior
+Frontend Sidebar.tsx	Conditional ordering menu	Low
+Frontend api.ts	Add trips API calls	Low
+Module	Unchanged
+Sensor ingestion lambda	✅
+GPS live state	✅
+Truck management	✅
+QR generation	✅ (QR encodes truck_id, not order/trip ID — already correct)
+Auth / cognito	✅
+Seller connections	✅
+Onboarding	✅
+KYC upload	✅
+Depot/station CRUD	✅
+Key design decisions for your approval before I write code
+Trip creation timing in Mode A — I propose creating the Trip at finish-loading (when the truck marks loading done and fuel is recorded), not at depart. This gives the trip a fuel_loaded snapshot before it moves. Does that match your expected flow?
+
+QR scan in Mode B — Currently handleScanOrder updates an order. In Mode B there is no order. Should the scan endpoint become PATCH /v1/trips/{id}/scan (cleaner, requires frontend change), or should the existing scan endpoint be extended to also accept a trip_id?
+
+Delivery note — Not yet implemented in the backend (the frontend has a placeholder). The trips table schema I proposed includes fuel_loaded and fuel_delivered JSONB to support this. Should the delivery note be generated as a PDF endpoint (GET /v1/trips/{id}/delivery-note) in Phase 2, or deferred to Phase 3?
+
+Dispatch API auth — The Dispatch API is called by a machine (the client's ERP). That means API key auth, not Cognito JWT. Should we add a per-workspace API key table, or use a simpler shared secret passed as the Bearer token initially?
