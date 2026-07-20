@@ -1,0 +1,10 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /ingest/telemetry",
+  "rawPath": "/ingest/telemetry",
+  "headers": {
+    "authorization": "Bearer test-secret",
+    "content-type": "application/json"
+  },
+  "body": "[{\"ident\":\"TEST-001\",\"timestamp\":1780272000.0,\"position.latitude\":55.75,\"position.longitude\":37.62}]"
+}

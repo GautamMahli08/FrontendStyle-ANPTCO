@@ -1,0 +1,48 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [locallyPassed]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: go.sum
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ap-south-1
+
+      - name: Install SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Build
+        run: sam build --no-cached
+
+      - name: Deploy
+        run: sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
+
+      - name: Run migrations
+        run: |
+          aws lambda invoke \
+            --function-name location-geofence-service-MigrateFunction-wrAVaVVCLtXs \
+            --payload '{}' \
+            --cli-binary-format raw-in-base64-out \
+            /tmp/result.json
+          cat /tmp/result.json

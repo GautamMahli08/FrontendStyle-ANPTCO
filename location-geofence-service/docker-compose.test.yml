@@ -1,0 +1,22 @@
+version: "3.9"
+
+# Ephemeral PostgreSQL for integration tests.
+# Uses tmpfs so it starts fast and leaves no data on disk.
+# Usage: make test-integration  (starts, tests, tears down automatically)
+
+services:
+  postgres-test:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: geofence
+      POSTGRES_PASSWORD: geofence
+      POSTGRES_DB: geofence_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geofence -d geofence_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 20

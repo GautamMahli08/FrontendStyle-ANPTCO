@@ -1,0 +1,28 @@
+version: "3.9"
+
+# Local development stack.
+# Usage:
+#   make db-up          # start postgres
+#   make db-migrate     # apply migrations
+#   make db-down        # stop and remove containers
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: geofence
+      POSTGRES_PASSWORD: geofence
+      POSTGRES_DB: geofence_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geofence -d geofence_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

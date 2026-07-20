@@ -1,0 +1,545 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Core API service for the ANPTCO platform.
+  Serves truck/fleet data, live positions, and order management to the dashboard.
+  Authenticated via Cognito JWT; all data scoped to the caller's workspace.
+
+# ── Parameters ────────────────────────────────────────────────────────────────
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group of the RDS instance; Core API Lambda will be allowed in on 5432
+
+  SecretsArn:
+    Type: String
+    Description: >
+      ARN of the Secrets Manager secret containing database_url.
+      May be the same secret used by the ingestion service.
+
+  LogLevel:
+    Type: String
+    Default: info
+    AllowedValues: [debug, info, warn, error]
+
+  # DevWorkspaceID: when non-empty, JWT auth is bypassed and every request is
+  # scoped to this UUID. Leave empty in production.
+  DevWorkspaceID:
+    Type: String
+    Default: ""
+
+  # SES verified sender address — leave empty to disable email notifications.
+  SESFromAddress:
+    Type: String
+    Default: ""
+
+# ── Globals ───────────────────────────────────────────────────────────────────
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Architectures: [x86_64]
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        DATABASE_URL: ""
+        SECRETS_ARN:       !Ref SecretsArn
+        LOG_LEVEL:         !Ref LogLevel
+        DEV_WORKSPACE_ID:  !Ref DevWorkspaceID
+        QR_BUCKET:         !Ref QRBucket
+        KYC_BUCKET:        !Ref KYCBucket
+        CDN_BASE_URL:      !Sub "https://${QRBucket}.s3.${AWS::Region}.amazonaws.com"
+        SES_FROM_ADDRESS:  !Ref SESFromAddress
+        USER_POOL_ID:      !Ref UserPool
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── Cognito User Pool ───────────────────────────────────────────────────────
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-users"
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: workspace_id
+          AttributeDataType: String
+          Mutable: false
+          Required: false
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      # PostConfirmation trigger is wired post-deploy to avoid a CFN circular
+      # dependency (UserPool↔SignupFunction). Run after first deployment:
+      #   aws cognito-idp update-user-pool --user-pool-id <ID> \
+      #     --lambda-config PostConfirmation=<SignupFunction.Arn>
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${AWS::StackName}-web"
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      # ID token includes custom attributes; access token does not by default.
+      # The JWT authorizer is configured to accept ID tokens (aud = ClientId).
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      CallbackURLs:
+        - http://localhost:3000/auth/callback
+      SupportedIdentityProviders: [COGNITO]
+
+  # ── S3 buckets ──────────────────────────────────────────────────────────────
+
+  QRBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "anptco-qr-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  QRBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref QRBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${QRBucket.Arn}/*"
+
+  KYCBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "anptco-kyc-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ── Security group for the Core API Lambda ──────────────────────────────────
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} Lambda egress to RDS"
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+
+  RdsIngressFromCoreApi:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  # ── API Gateway HTTP API ────────────────────────────────────────────────────
+  CoreApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Description: Core REST API — trucks, live positions, orders
+      Auth:
+        DefaultAuthorizer: CognitoJWT
+        Authorizers:
+          CognitoJWT:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+              audience:
+                - !Ref UserPoolClient
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit:  200
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowHeaders: ["Authorization", "Content-Type"]
+        AllowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+
+  # ── Core API Lambda ─────────────────────────────────────────────────────────
+  CoreFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: .
+      Handler: bootstrap
+      Description: Core API — trucks + live positions + order management
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SecretsArn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+              Resource: !Sub "${QRBucket.Arn}/*"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+              Resource: !Sub "${KYCBucket.Arn}/*"
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminCreateUser
+                - cognito-idp:AdminAddUserToGroup
+                - cognito-idp:AdminUpdateUserAttributes
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        # Health check (no auth — overridden per-route)
+        Health:
+          Type: HttpApi
+          Properties:
+            Path: /v1/health
+            Method: GET
+            ApiId: !Ref CoreApi
+            Auth:
+              Authorizer: NONE
+        # Trucks
+        ListTrucks:
+          Type: HttpApi
+          Properties:
+            Path: /v1/trucks
+            Method: GET
+            ApiId: !Ref CoreApi
+        GetTruckPosition:
+          Type: HttpApi
+          Properties:
+            Path: /v1/trucks/{id}/position
+            Method: GET
+            ApiId: !Ref CoreApi
+        SeedTruckPosition:
+          Type: HttpApi
+          Properties:
+            Path: /v1/trucks/{id}/position
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        GetTruckQR:
+          Type: HttpApi
+          Properties:
+            Path: /v1/trucks/{id}/qr
+            Method: GET
+            ApiId: !Ref CoreApi
+        # Orders
+        ListOrders:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders
+            Method: GET
+            ApiId: !Ref CoreApi
+        CreateOrder:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders
+            Method: POST
+            ApiId: !Ref CoreApi
+        GetOrder:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders/{id}
+            Method: GET
+            ApiId: !Ref CoreApi
+        ScanOrder:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders/{id}/scan
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        AcceptOrder:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders/{id}/accept
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        AssignTSP:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders/{id}/assign-tsp
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        AssignTruck:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders/{id}/assign-truck
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        StartLoading:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders/{id}/start-loading
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        FinishLoading:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders/{id}/finish-loading
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        Depart:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders/{id}/depart
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        # Connections
+        RequestConnection:
+          Type: HttpApi
+          Properties:
+            Path: /v1/connections
+            Method: POST
+            ApiId: !Ref CoreApi
+        ListConnections:
+          Type: HttpApi
+          Properties:
+            Path: /v1/connections
+            Method: GET
+            ApiId: !Ref CoreApi
+        ResolveConnection:
+          Type: HttpApi
+          Properties:
+            Path: /v1/connections/{id}/{action}
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        # Sensor requests
+        SubmitSensorRequest:
+          Type: HttpApi
+          Properties:
+            Path: /v1/sensor-requests
+            Method: POST
+            ApiId: !Ref CoreApi
+        ListSensorRequests:
+          Type: HttpApi
+          Properties:
+            Path: /v1/sensor-requests
+            Method: GET
+            ApiId: !Ref CoreApi
+        ReviewSensorRequest:
+          Type: HttpApi
+          Properties:
+            Path: /v1/sensor-requests/{id}/{action}
+            Method: PATCH
+            ApiId: !Ref CoreApi
+        KYCUploadUrl:
+          Type: HttpApi
+          Properties:
+            Path: /v1/kyc/upload-url
+            Method: POST
+            ApiId: !Ref CoreApi
+        # Stations + Depots (geofence CRUD)
+        CreateStation:
+          Type: HttpApi
+          Properties:
+            Path: /v1/stations
+            Method: POST
+            ApiId: !Ref CoreApi
+        ListStations:
+          Type: HttpApi
+          Properties:
+            Path: /v1/stations
+            Method: GET
+            ApiId: !Ref CoreApi
+        CreateDepot:
+          Type: HttpApi
+          Properties:
+            Path: /v1/depots
+            Method: POST
+            ApiId: !Ref CoreApi
+        ListDepots:
+          Type: HttpApi
+          Properties:
+            Path: /v1/depots
+            Method: GET
+            ApiId: !Ref CoreApi
+        # Seller discovery + user management
+        ListSellers:
+          Type: HttpApi
+          Properties:
+            Path: /v1/sellers
+            Method: GET
+            ApiId: !Ref CoreApi
+        InviteUser:
+          Type: HttpApi
+          Properties:
+            Path: /v1/users/invite
+            Method: POST
+            ApiId: !Ref CoreApi
+
+        # ── Mode B dispatch — Bearer API key, NOT a Cognito JWT ────────────────
+        DispatchTrip:
+          Type: HttpApi
+          Properties:
+            Path: /v1/trips/dispatch
+            Method: POST
+            ApiId: !Ref CoreApi
+            Auth:
+              Authorizer: NONE
+
+        # ── ERP console endpoints — Bearer API key, NOT a Cognito JWT ─────────
+        ERPTrucks:
+          Type: HttpApi
+          Properties:
+            Path: /v1/erp/trucks
+            Method: GET
+            ApiId: !Ref CoreApi
+            Auth:
+              Authorizer: NONE
+
+        ERPDrivers:
+          Type: HttpApi
+          Properties:
+            Path: /v1/erp/drivers
+            Method: GET
+            ApiId: !Ref CoreApi
+            Auth:
+              Authorizer: NONE
+
+        ERPGeofences:
+          Type: HttpApi
+          Properties:
+            Path: /v1/erp/geofences
+            Method: GET
+            ApiId: !Ref CoreApi
+            Auth:
+              Authorizer: NONE
+
+        # ── Catch-all: trips, workspace flags, admin panel — Cognito JWT ───────
+        # Specific routes above take precedence; this route catches everything
+        # else (GET /v1/workspace, all /v1/trips/*, all /admin/v1/*).
+        # API Gateway validates the JWT and populates RequestContext.Authorizer
+        # before the Lambda is invoked.
+        CatchAll:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+            ApiId: !Ref CoreApi
+
+  # ── PostConfirmation signup trigger ─────────────────────────────────────────
+  # Runs after a user confirms their email via self-signup.
+  # Sets custom:workspace_id and adds the user to the CLIENT Cognito group.
+  SignupFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: .
+      Handler: bootstrap
+      Description: Cognito PostConfirmation trigger — auto-assigns workspace_id to self-registered clients
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref UserPool
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminUpdateUserAttributes
+                - cognito-idp:AdminAddUserToGroup
+              Resource: !GetAtt UserPool.Arn
+
+  SignupFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${SignupFunction}"
+      RetentionInDays: 30
+
+  # Grant Cognito permission to invoke the signup Lambda.
+  SignupFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt SignupFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  CoreLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CoreFunction}"
+      RetentionInDays: 30
+
+  # ── CloudWatch Alarms ───────────────────────────────────────────────────────
+  ErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-errors"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CoreFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  P99LatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-p99-latency"
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CoreFunction
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+# ── Outputs ───────────────────────────────────────────────────────────────────
+Outputs:
+  ApiEndpoint:
+    Description: Base URL of the Core API
+    Value: !Sub "https://${CoreApi}.execute-api.${AWS::Region}.amazonaws.com"
+
+  UserPoolId:
+    Description: Cognito User Pool ID — needed for SDK configuration in the frontend
+    Value: !Ref UserPool
+
+  UserPoolClientId:
+    Description: Cognito App Client ID — needed for frontend Auth.configure()
+    Value: !Ref UserPoolClient
+
+  CoreFunctionArn:
+    Value: !GetAtt CoreFunction.Arn
+
+  QRBucketName:
+    Description: S3 bucket for QR PNG files
+    Value: !Ref QRBucket
+
+  KYCBucketName:
+    Description: S3 bucket for KYC documents (private)
+    Value: !Ref KYCBucket
+
+  CDNBaseURL:
+    Description: S3 base URL for QR PNG files
+    Value: !Sub "https://${QRBucket}.s3.${AWS::Region}.amazonaws.com"

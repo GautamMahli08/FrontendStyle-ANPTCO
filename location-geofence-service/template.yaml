@@ -1,0 +1,290 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Location & Geofence Service.
+  Receives flespi telemetry via API Gateway HTTP API, persists location history,
+  detects geofence entry/exit, and drives the order state machine.
+
+# ── Parameters ────────────────────────────────────────────────────────────────
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC that contains the RDS instance
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for the Lambda (same AZs as RDS)
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group of the RDS instance; Lambda will be added as a source
+
+  SecretsArn:
+    Type: String
+    Description: >
+      ARN of the Secrets Manager secret that contains DATABASE_URL and
+      FLESPI_WEBHOOK_SECRET as a JSON object.
+  AppWorkspaceDefault:
+    Type: String
+    Description: Default workspace identifier (e.g. ws-anptco)
+  GeofenceDestRadiusM:
+    Type: Number
+    Default: 100
+    Description: Station geofence arrival radius in metres
+  GeofenceDepotRadiusM:
+    Type: Number
+    Default: 200
+    Description: Depot geofence arrival radius in metres
+  LogLevel:
+    Type: String
+    Default: info
+    AllowedValues: [debug, info, warn, error]
+  EventBusName:
+    Type: String
+    Default: ""
+    Description: >
+      Name of the EventBridge custom bus to publish lifecycle events
+      (OrderArrived, OrderCompleted). Leave empty to disable notifications.
+  TelemetryRetentionDays:
+    Type: Number
+    Default: 90
+    Description: >
+      Days to retain raw truck_telemetry rows. The maintenance function drops
+      monthly partitions whose entire date range is older than this window.
+
+# ── Conditions ────────────────────────────────────────────────────────────────
+Conditions:
+  NotificationsEnabled: !Not [!Equals [!Ref EventBusName, ""]]
+
+# ── Globals ───────────────────────────────────────────────────────────────────
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Architectures: [x86_64]
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        DATABASE_URL: ""
+        FLESPI_WEBHOOK_SECRET: ""
+        SECRETS_ARN:            !Ref SecretsArn
+        APP_WORKSPACE_DEFAULT:  !Ref AppWorkspaceDefault
+        GEOFENCE_DEST_RADIUS_M: !Ref GeofenceDestRadiusM
+        GEOFENCE_DEPOT_RADIUS_M: !Ref GeofenceDepotRadiusM
+        LOG_LEVEL:              !Ref LogLevel
+        EVENTS_BUS_NAME:           !Ref EventBusName
+        TELEMETRY_RETENTION_DAYS:  !Ref TelemetryRetentionDays
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+Resources:
+
+  # Security group for the Lambda; egress-all, no explicit ingress needed.
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} Lambda egress to RDS"
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+
+  # Allow the Lambda SG to connect to RDS on port 5432.
+  RdsIngressFromLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  # ── Lambda function ─────────────────────────────────────────────────────────
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      # SAM calls `make build-IngestFunction` which writes the binary to ARTIFACTS_DIR.
+      BuildMethod: makefile
+    Properties:
+      CodeUri: .
+      Handler: bootstrap
+      Description: Flespi telemetry ingestion, geofence detection, order state machine
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: !Ref SubnetIds
+      Policies:
+        - VPCAccessPolicy: {}
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SecretsArn
+        - !If
+          - NotificationsEnabled
+          - Statement:
+              - Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}"
+          - !Ref AWS::NoValue
+      Events:
+        IngestTelemetry:
+          Type: HttpApi
+          Properties:
+            Path: /ingest/telemetry
+            Method: POST
+            ApiId: !Ref IngestApi
+
+  # ── Migration Lambda ────────────────────────────────────────────────────────
+  # Invoked manually to apply pending SQL migrations.
+  # Invoke: aws lambda invoke --function-name <name> --payload '{}' out.json
+  MigrateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: .
+      Handler: bootstrap
+      Description: Manual database migration runner — invoke once per release
+      Timeout: 120
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: !Ref SubnetIds
+      Policies:
+        - VPCAccessPolicy: {}
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SecretsArn
+
+  MigrateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MigrateFunction}"
+      RetentionInDays: 30
+
+  # ── Maintenance Lambda ──────────────────────────────────────────────────────
+  # Runs on the 1st of every month at 01:00 UTC.
+  # Creates the next 3 months of truck_telemetry partitions and drops any
+  # partitions whose entire date range is older than TelemetryRetentionDays.
+  MaintenanceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: .
+      Handler: bootstrap
+      Description: Monthly partition maintenance — create upcoming, drop expired
+      Timeout: 120
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: !Ref SubnetIds
+      Policies:
+        - VPCAccessPolicy: {}
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SecretsArn
+        - !If
+          - NotificationsEnabled
+          - Statement:
+              - Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}"
+          - !Ref AWS::NoValue
+      Events:
+        MonthlyMaintenance:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(0 1 1 * ? *)"
+            Description: Monthly partition maintenance on the 1st at 01:00 UTC
+
+  MaintenanceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MaintenanceFunction}"
+      RetentionInDays: 30
+
+  # ── API Gateway (HTTP API v2) ───────────────────────────────────────────────
+  IngestApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Description: Flespi webhook endpoint — receives batched device telemetry
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 100
+
+  # ── CloudWatch Log Group ────────────────────────────────────────────────────
+  # Explicit resource so RetentionInDays is enforced; Lambda creates the group
+  # automatically otherwise with no expiry.
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${IngestFunction}"
+      RetentionInDays: 30
+
+  # ── CloudWatch Alarms ───────────────────────────────────────────────────────
+  ErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-errors"
+      AlarmDescription: >
+        Lambda error count exceeded 5 in a 5-minute window.
+        Indicates a systematic failure (DB unreachable, config invalid, etc.).
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  P99LatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-p99-latency"
+      AlarmDescription: Lambda P99 duration exceeded 10 s — investigate DB latency or cold starts.
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestFunction
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  ThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-throttles"
+      AlarmDescription: Lambda throttle count exceeded 0 — may drop flespi messages.
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+# ── Outputs ───────────────────────────────────────────────────────────────────
+Outputs:
+  IngestEndpoint:
+    Description: >
+      HTTPS URL to set as the flespi webhook target.
+      Path: POST /ingest/telemetry
+    Value: !Sub "https://${IngestApi}.execute-api.${AWS::Region}.amazonaws.com/ingest/telemetry"
+
+  IngestFunctionArn:
+    Value: !GetAtt IngestFunction.Arn
+
+  IngestFunctionName:
+    Value: !Ref IngestFunction
+
+  IngestLogGroupName:
+    Value: !Ref IngestLogGroup
