@@ -1,5 +1,15 @@
 export type UserRole = 'PLATFORM_ADMIN' | 'SELLER_MANAGER' | 'TRANSPORT_ADMIN' | 'CLIENT' | 'DRIVER';
 
+// Product mode — which capabilities the platform exposes (see docs/PRODUCT_MODES.md).
+// 'full' = Ordering + Monitoring; 'monitoring' = Monitoring + delivery proof only.
+export type ProductMode = 'full' | 'monitoring';
+
+export interface ProductModules {
+  ordering: boolean;
+  monitoring: boolean;
+  dispatchApi: boolean;
+}
+
 export type OrderStatus =
   | 'PLACED'
   | 'ACCEPTED'

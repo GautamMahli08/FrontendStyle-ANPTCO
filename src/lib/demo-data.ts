@@ -13,11 +13,17 @@ import {
   SellerConnectionRequest,
   SellerOnboarding,
   Driver,
+  ProductMode,
+  ProductModules,
 } from '@/src/types';
 
 // ── Demo version — bump this to force a full localStorage reset ──
 const DEMO_VERSION = 'v3.6';
 const VERSION_KEY  = 'fuel_demo_version';
+
+// Product mode is intentionally a standalone key (not in STORAGE_KEYS) so it
+// survives demo reseeds/version bumps — switching mode never touches seeded data.
+const PRODUCT_MODE_KEY = 'fuel_product_mode';
 
 // ── Fixed truck compartment model ─────────────────────────────
 // Every truck has the same physical layout: 4 compartments, each holding a
@@ -1126,6 +1132,25 @@ export const setCurrentUser = (user: User | null) => {
 };
 
 export const logout = () => setCurrentUser(null);
+
+// ── Product mode (full vs monitoring-only) ────────────────────
+export const getProductMode = (): ProductMode => {
+  if (typeof window === 'undefined') return 'full';
+  return localStorage.getItem(PRODUCT_MODE_KEY) === 'monitoring' ? 'monitoring' : 'full';
+};
+
+export const setProductMode = (mode: ProductMode) => {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(PRODUCT_MODE_KEY, mode);
+};
+
+// Capability switch derived from the active product mode. Monitoring is always on;
+// Ordering (marketplace screens) is full-only; the Dispatch API stands in for it
+// in monitoring-only. See docs/PRODUCT_MODES.md §3.
+export const getModules = (mode: ProductMode = getProductMode()): ProductModules =>
+  mode === 'monitoring'
+    ? { ordering: false, monitoring: true, dispatchApi: true }
+    : { ordering: true,  monitoring: true, dispatchApi: false };
 
 // ── Utility ───────────────────────────────────────────────────
 export const findUserByEmail = (email: string): User | undefined =>

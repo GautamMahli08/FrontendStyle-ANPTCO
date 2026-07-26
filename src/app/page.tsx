@@ -1,13 +1,16 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { ProductMode } from '@/src/types';
 import {
   setCurrentUser,
   PLATFORM_ADMIN,
   getDrivers,
   getUsers,
   DEMO_PERSONAS,
+  getProductMode,
+  setProductMode,
 } from '@/src/lib/demo-data';
 import NetworkMap from '@/src/components/maps/NetworkMap';
 import OomcoLogo from '@/src/components/assets/OomcoLogo';
@@ -72,15 +75,41 @@ const PERSONA_THEME: Record<string, { card: string; badge: string; iconBg: strin
   teal:   { card: 'border-teal-200   hover:border-teal-400   hover:bg-teal-50/50',      badge: 'bg-teal-100   text-teal-700',     iconBg: 'bg-teal-100   text-teal-600'     },
 };
 
-// Persona layout — hide platform admin, client 2 and driver from the selector
-const PERSONA_ROWS = [
-  ['client-001', 'seller-001'],
-  ['tsp-001', 'tsp-002'],
-];
+// Persona layout per product mode — hide platform admin, client 2 and driver from the
+// selector. Both modes keep the Seller Manager: in Monitoring-Only the seller loses the
+// marketplace screens but still owns full fleet monitoring (see Sidebar gating).
+const PERSONA_ROWS_BY_MODE: Record<ProductMode, string[][]> = {
+  full: [
+    ['client-001', 'seller-001'],
+    ['tsp-001', 'tsp-002'],
+  ],
+  monitoring: [
+    ['client-001', 'seller-001'],
+    ['tsp-001', 'tsp-002'],
+  ],
+};
+
+// Mode-specific landing copy.
+const MODE_COPY: Record<ProductMode, { tagline: React.ReactNode }> = {
+  full: {
+    tagline: <>Real-time IoT tracking · Geofenced delivery · QR-secured offloading</>,
+  },
+  monitoring: {
+    tagline: <>Live tracking · Verified delivery notes · Your ordering system stays yours</>,
+  },
+};
 
 export default function Home() {
   const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
+  const [mode, setMode] = useState<ProductMode>('full');
+
+  // Hydrate the persisted mode after mount (avoids SSR/localStorage mismatch).
+  useEffect(() => { setMode(getProductMode()); }, []);
+
+  const selectMode = (next: ProductMode) => { setMode(next); setProductMode(next); };
+
+  const personaRows = PERSONA_ROWS_BY_MODE[mode];
 
   const quickLogin = (personaId: string) => {
     setLoading(personaId);
@@ -149,11 +178,43 @@ export default function Home() {
             </h1>
 
             <p className="text-slate-500 text-sm md:text-base max-w-xl mx-auto mb-5">
-              Real-time IoT tracking · Geofenced delivery · QR-secured offloading <br/>Powered by  <span className="text-slate-700 font-semibold">ANPTCO
-              
-                
+              {MODE_COPY[mode].tagline} <br/>Powered by  <span className="text-slate-700 font-semibold">ANPTCO
+
+
                 </span>
             </p>
+
+            {/* ── PRODUCT MODE TOGGLE ── */}
+            <div className="flex flex-col items-center gap-1.5 mb-5">
+              <div className="inline-flex p-1 rounded-full bg-slate-100 border border-slate-200 shadow-inner">
+                {([
+                  { id: 'full' as const,       label: 'Full Platform',    icon: '🛒' },
+                  { id: 'monitoring' as const, label: 'Monitoring-Only',  icon: '📡' },
+                ]).map(opt => {
+                  const active = mode === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => selectMode(opt.id)}
+                      aria-pressed={active}
+                      className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-200 ${
+                        active
+                          ? 'bg-white text-blue-700 shadow-sm ring-1 ring-blue-100'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <span className="text-sm leading-none">{opt.icon}</span>
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-slate-400">
+                {mode === 'full'
+                  ? 'Ordering marketplace + live fleet monitoring'
+                  : 'Live fleet monitoring + verified delivery — ordering handled by the client'}
+              </p>
+            </div>
 
             {/* Feature pills */}
             <div className="flex flex-wrap justify-center gap-2">
@@ -194,7 +255,7 @@ export default function Home() {
             </div>
 
             <div className="space-y-2 max-w-3xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-3">
-              {PERSONA_ROWS.map((row, ri) => (
+              {personaRows.map((row, ri) => (
                 <div key={ri} className={`grid gap-2 ${row.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
                   {row
                     .map(id => DEMO_PERSONAS.find(p => p.id === id))

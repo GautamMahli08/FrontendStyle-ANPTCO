@@ -1,11 +1,16 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { UserRole } from '@/src/types';
-import { logout } from '@/src/lib/demo-data';
+import { UserRole, ProductMode } from '@/src/types';
+import { logout, getProductMode, getModules } from '@/src/lib/demo-data';
 import OomcoLogo from '@/src/components/assets/OomcoLogo';
 
-const nav: Record<UserRole, Array<{ name: string; path: string; icon: string }>> = {
+// Items tagged `module: 'ordering'` belong to the marketplace workflow and are hidden
+// in Monitoring-Only mode. Untagged items (monitoring, onboarding) are always shown.
+type NavItem = { name: string; path: string; icon: string; module?: 'ordering' };
+
+const nav: Record<UserRole, NavItem[]> = {
   PLATFORM_ADMIN: [
     { name: 'Dashboard',          path: '/platform-admin/dashboard',          icon: '🏠' },
     { name: 'Sensor Integration', path: '/platform-admin/sensor-integration', icon: '🔧' },
@@ -16,15 +21,15 @@ const nav: Record<UserRole, Array<{ name: string; path: string; icon: string }>>
 
   SELLER_MANAGER: [
     { name: 'Dashboard',       path: '/seller/dashboard',       icon: '🏠' },
-    { name: 'Orders',          path: '/seller/orders',          icon: '📦' },
+    { name: 'Orders',          path: '/seller/orders',          icon: '📦', module: 'ordering' },
     { name: 'Fleet Monitor',   path: '/seller/fleet-monitor',   icon: '🗺️' },
-    { name: 'KYC Review',      path: '/seller/kyc-review',      icon: '📄' },
-    { name: 'Transporters',    path: '/seller/transporters',    icon: '🚛' },
+    { name: 'KYC Review',      path: '/seller/kyc-review',      icon: '📄', module: 'ordering' },
+    { name: 'Transporters',    path: '/seller/transporters',    icon: '🚛', module: 'ordering' },
   ],
 
   TRANSPORT_ADMIN: [
     { name: 'Dashboard',      path: '/transport/dashboard',       icon: '🏠' },
-    { name: 'Orders',         path: '/transport/orders',          icon: '📦' },
+    { name: 'Orders',         path: '/transport/orders',          icon: '📦', module: 'ordering' },
     { name: 'Fleet Monitor',  path: '/transport/fleet-monitor',   icon: '🗺️' },
     { name: 'My Trucks',      path: '/transport/trucks',          icon: '🚛' },
     { name: 'Drivers',        path: '/transport/drivers',         icon: '👥' },
@@ -32,7 +37,7 @@ const nav: Record<UserRole, Array<{ name: string; path: string; icon: string }>>
 
   CLIENT: [
     { name: 'Dashboard',   path: '/client/dashboard',   icon: '🏠' },
-    { name: 'Place Order', path: '/client/orders/new',  icon: '➕' },
+    { name: 'Place Order', path: '/client/orders/new',  icon: '➕', module: 'ordering' },
     { name: 'My Orders',   path: '/client/orders',      icon: '📦' },
   ],
 
@@ -65,7 +70,13 @@ const EXACT_PAGES = new Set(['/client/orders/new', '/transport/trucks/register']
 export default function Sidebar({ userRole }: { userRole: UserRole }) {
   const router   = useRouter();
   const pathname = usePathname();
-  const items    = nav[userRole] ?? [];
+
+  // Hydrate the active product mode after mount (localStorage is client-only).
+  const [mode, setMode] = useState<ProductMode>('full');
+  useEffect(() => { setMode(getProductMode()); }, []);
+  const modules = getModules(mode);
+
+  const items = (nav[userRole] ?? []).filter(i => !i.module || modules[i.module]);
 
   function isActive(path: string) {
     if (pathname === path) return true;
@@ -96,6 +107,11 @@ export default function Sidebar({ userRole }: { userRole: UserRole }) {
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ROLE_DOT[userRole] ?? 'bg-gray-400'}`} />
           <span className="text-xs font-semibold text-gray-500">{ROLE_LABEL[userRole]}</span>
         </div>
+        {mode === 'monitoring' && (
+          <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-600">
+            📡 Monitoring-Only
+          </span>
+        )}
       </div>
 
       {/* Nav items */}
