@@ -23,7 +23,7 @@ import { sendWebhook } from './webhooks';
 import { updateTripStatus as updateErpTripStatus } from './dispatch-client';
 
 // ── Demo version — bump this to force a full localStorage reset ──
-const DEMO_VERSION = 'v3.7';
+const DEMO_VERSION = 'v3.8';
 const VERSION_KEY  = 'fuel_demo_version';
 
 // Product mode is intentionally a standalone key (not in STORAGE_KEYS) so it
@@ -218,6 +218,22 @@ const DEMO_DRIVERS: Driver[] = [
     createdAt: new Date('2026-01-25'),
   },
   {
+    id: 'driver-004',
+    email: 'driver2@transporter2.com',
+    password: 'driver123',
+    firstName: 'Driver',
+    lastName: '4',
+    phone: '+968 9333 4444',
+    licenseNumber: 'DL-OM-004',
+    tspId: 'tsp-002',
+    tspName: 'Transporter 2',
+    workspaceId: 'ws-anptco',
+    verified: true,
+    assignedTruckId: 'truck-005',
+    currentStatus: 'AVAILABLE',
+    createdAt: new Date('2026-02-05'),
+  },
+  {
     id: 'driver-xyz-1',
     email: 'driver1@xyzpetroleum.com',
     password: 'driver123',
@@ -246,6 +262,22 @@ const DEMO_DRIVERS: Driver[] = [
     workspaceId: 'ws-xyz-petroleum',
     verified: true,
     assignedTruckId: 'truck-xyz-2',
+    currentStatus: 'AVAILABLE',
+    createdAt: new Date('2026-02-01'),
+  },
+  {
+    id: 'driver-xyz-3',
+    email: 'driver3@xyzpetroleum.com',
+    password: 'driver123',
+    firstName: 'Yousuf',
+    lastName: 'Al-Rawahi',
+    phone: '+968 9555 3030',
+    licenseNumber: 'DL-OM-103',
+    tspId: 'xyz-petroleum',
+    tspName: 'XYZ Petroleum LLC',
+    workspaceId: 'ws-xyz-petroleum',
+    verified: true,
+    assignedTruckId: 'truck-xyz-3',
     currentStatus: 'AVAILABLE',
     createdAt: new Date('2026-02-01'),
   },
@@ -415,6 +447,27 @@ const DEMO_TRUCKS: Truck[] = [
     currentLng: 58.189120,
     createdAt: new Date('2026-02-08'),
   },
+  // Spare — a second, always-idle truck for Transporter 2 so a stuck/open
+  // trip on TRK-001..004 (e.g. an abandoned test run) doesn't leave every
+  // Full Platform truck unavailable for dispatch at once.
+  {
+    id: 'truck-005',
+    registrationNumber: 'TRK-005',
+    assignedDriverId: 'driver-004',
+    tspId: 'tsp-002',
+    tspName: 'Transporter 2',
+    workspaceId: 'ws-anptco',
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
+    status: 'IDLE',
+    currentLat: 23.670250,
+    currentLng: 58.189120,
+    qrCode: 'QR-TRK-005',
+    sensorConfigured: true,
+    commercialApproval: true,
+    safetyApproval: true,
+    createdAt: new Date('2026-02-08'),
+  },
   // XYZ Petroleum's own fleet — registered under ws-xyz-petroleum, the
   // Monitoring-Only tenant, not the ws-anptco marketplace tenant above.
   {
@@ -450,6 +503,25 @@ const DEMO_TRUCKS: Truck[] = [
     currentLng: 58.189120,
     qrCode: 'QR-TRK-102',
     galileoskyDeviceId: 'GSKY-XYZ-102',
+    sensorConfigured: true,
+    commercialApproval: true,
+    safetyApproval: true,
+    createdAt: new Date('2026-02-01'),
+  },
+  {
+    id: 'truck-xyz-3',
+    registrationNumber: 'TRK-103',
+    assignedDriverId: 'driver-xyz-3',
+    tspId: 'xyz-petroleum',
+    tspName: 'XYZ Petroleum LLC',
+    workspaceId: 'ws-xyz-petroleum',
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
+    status: 'IDLE',
+    currentLat: 23.670250,
+    currentLng: 58.189120,
+    qrCode: 'QR-TRK-103',
+    galileoskyDeviceId: 'GSKY-XYZ-103',
     sensorConfigured: true,
     commercialApproval: true,
     safetyApproval: true,

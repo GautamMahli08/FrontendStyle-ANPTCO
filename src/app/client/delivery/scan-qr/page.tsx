@@ -166,7 +166,7 @@ export default function ScanQRPage() {
   function confirmDelivery() {
     if (!order) return;
     setStage('processing');
-    setTimeout(() => {
+    setTimeout(async () => {
       // Reconcile expected_volume_l (dispatch) against the sensor-measured
       // delivered volume (plan §4/§8) — the shortfall is the money line.
       const deliveredVolumeL = orderFuelTelemetry(order).totalVolume;
@@ -194,8 +194,11 @@ export default function ScanQRPage() {
       if (order.assignedTruckId) updateTruck(order.assignedTruckId, { status: 'IDLE' });
 
       if (order.erpTripId) {
-        void updateErpTripStatus(order.erpTripId, 'DELIVERED');
-        void updateErpTripStatus(order.erpTripId, 'CLOSED');
+        // Must be sequenced, not fired concurrently — two un-awaited PATCHes
+        // can land out of order and leave the trip stuck at DELIVERED
+        // forever, which then 409-blocks this truck from any future dispatch.
+        await updateErpTripStatus(order.erpTripId, 'DELIVERED');
+        await updateErpTripStatus(order.erpTripId, 'CLOSED');
       }
       void sendWebhook({
         event: 'delivery.confirmed',
