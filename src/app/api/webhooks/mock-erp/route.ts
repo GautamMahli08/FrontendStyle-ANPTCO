@@ -6,10 +6,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { TENANT_API_KEY } from '@/src/lib/webhooks';
 
-const INBOX_FILE = join(process.cwd(), 'erp-webhook-inbox.json');
+// See trip-store.ts — process.cwd() is read-only on most serverless hosts.
+const INBOX_FILE = join(tmpdir(), 'xyz-monitoring-webhook-inbox.json');
 
 interface InboxEntry {
   receivedAt: string;
@@ -48,7 +50,12 @@ export async function POST(req: NextRequest) {
   // Idempotent for the receiver: replaying the same X-Event-Id doesn't duplicate the entry.
   if (!inbox.some(e => e.eventId === eventId)) {
     inbox.push({ receivedAt: new Date().toISOString(), eventId, signatureValid, payload });
-    writeFileSync(INBOX_FILE, JSON.stringify(inbox.slice(-500), null, 2), 'utf8');
+    try {
+      writeFileSync(INBOX_FILE, JSON.stringify(inbox.slice(-500), null, 2), 'utf8');
+    } catch {
+      // Best-effort persistence — a failed write here shouldn't fail the
+      // webhook delivery itself (the signature check below still applies).
+    }
   }
 
   if (!signatureValid) {

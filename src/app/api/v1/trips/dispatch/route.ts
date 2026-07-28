@@ -32,41 +32,54 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Duplicate erp_dispatch_no → idempotent replay, regardless of truck state.
-  const existingByDispatchNo = findByDispatchNo(tenantId, erp_dispatch_no);
-  if (existingByDispatchNo) {
-    return NextResponse.json({ trip: existingByDispatchNo, replay: true }, { status: 200 });
-  }
+  try {
+    // Duplicate erp_dispatch_no → idempotent replay, regardless of truck state.
+    const existingByDispatchNo = findByDispatchNo(tenantId, erp_dispatch_no);
+    if (existingByDispatchNo) {
+      return NextResponse.json({ trip: existingByDispatchNo, replay: true }, { status: 200 });
+    }
 
-  if (!KNOWN_TRUCK_PATTERN.test(truck_ref)) {
-    return NextResponse.json({ error: `unknown truck '${truck_ref}'` }, { status: 404 });
-  }
+    if (!KNOWN_TRUCK_PATTERN.test(truck_ref)) {
+      return NextResponse.json({ error: `unknown truck '${truck_ref}'` }, { status: 404 });
+    }
 
-  const activeTrip = findOpenTripForTruck(tenantId, truck_ref);
-  if (activeTrip) {
+    const activeTrip = findOpenTripForTruck(tenantId, truck_ref);
+    if (activeTrip) {
+      return NextResponse.json(
+        { error: 'truck already on an active trip', trip: activeTrip },
+        { status: 409 },
+      );
+    }
+
+    const trip = createTrip({
+      tenant_id: tenantId,
+      truck_ref,
+      driver_ref,
+      erp_dispatch_no,
+      idempotency_key: idempotencyKey,
+      expected_volume_l: Number(expected_volume_l) || 0,
+      product,
+      origin,
+      destination: { geofence_radius_m: DEFAULT_GEOFENCE_RADIUS_M, ...destination },
+      stops: Array.isArray(stops) ? stops : [],
+      telemetry_status: 'OK',
+    });
+
+    return NextResponse.json({ trip, replay: false }, { status: 201 });
+  } catch (err) {
+    // Surface the real cause instead of an opaque 500 with no body — this is
+    // how a read-only-filesystem deployment issue showed up as "unknown error".
     return NextResponse.json(
-      { error: 'truck already on an active trip', trip: activeTrip },
-      { status: 409 },
+      { error: `dispatch store failure: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 500 },
     );
   }
-
-  const trip = createTrip({
-    tenant_id: tenantId,
-    truck_ref,
-    driver_ref,
-    erp_dispatch_no,
-    idempotency_key: idempotencyKey,
-    expected_volume_l: Number(expected_volume_l) || 0,
-    product,
-    origin,
-    destination: { geofence_radius_m: DEFAULT_GEOFENCE_RADIUS_M, ...destination },
-    stops: Array.isArray(stops) ? stops : [],
-    telemetry_status: 'OK',
-  });
-
-  return NextResponse.json({ trip, replay: false }, { status: 201 });
 }
 
 export async function GET() {
-  return NextResponse.json({ trips: listTrips() });
+  try {
+    return NextResponse.json({ trips: listTrips() });
+  } catch (err) {
+    return NextResponse.json({ error: `dispatch store failure: ${err instanceof Error ? err.message : String(err)}`, trips: [] }, { status: 500 });
+  }
 }

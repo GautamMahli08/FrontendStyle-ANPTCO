@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { appendFileSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 
-const LOG_FILE = join(process.cwd(), 'demo-events.log');
+// process.cwd() is read-only on most serverless hosts (Vercel, Netlify, etc.) — see trip-store.ts.
+const LOG_FILE = join(tmpdir(), 'xyz-monitoring-demo-events.log');
 
 export async function POST(req: NextRequest) {
   try {

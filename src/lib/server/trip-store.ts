@@ -5,8 +5,14 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 
-const TRIPS_FILE = join(process.cwd(), 'dispatch-log.json');
+// process.cwd() is the deployed app bundle on most serverless hosts (Vercel,
+// Netlify, etc.) and is read-only there — writing there throws EROFS, which
+// surfaced to users as an opaque "HTTP 500 — unknown error". os.tmpdir() is
+// writable in those environments (though not persistent across cold starts —
+// fine for a demo; a real deployment would use an actual database here).
+const TRIPS_FILE = join(tmpdir(), 'xyz-monitoring-dispatch-log.json');
 
 export type TripStatus = 'CREATED' | 'EN_ROUTE' | 'ARRIVED' | 'DELIVERED' | 'CLOSED' | 'CANCELLED';
 const OPEN_STATUSES: TripStatus[] = ['CREATED', 'EN_ROUTE', 'ARRIVED', 'DELIVERED'];
