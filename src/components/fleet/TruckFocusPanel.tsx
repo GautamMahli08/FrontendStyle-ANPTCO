@@ -6,12 +6,21 @@ import OrderTimeline from '@/src/components/orders/OrderTimeline';
 import CopyId from '@/src/components/ui/CopyId';
 import {
   destinationCoords, FIXED_DEPOT, JOURNEY_DURATION_MS, shortOrderId,
+  destinationGeofenceRadiusM, getGeofenceDebounceState,
 } from '@/src/lib/demo-data';
+import { GEOFENCE_DEBOUNCE_TICKS } from '@/src/lib/geo';
+import { getCachedRoadRoute } from '@/src/lib/route-geometry';
+import { getHistory } from '@/src/lib/telemetry-store';
+import DeliveryQrPanel from '@/src/components/qr/DeliveryQrPanel';
 
 // Leaflet touches `window`, so load the map only on the client.
 const LiveTrackingMap = dynamic(() => import('@/src/components/maps/LiveTrackingMap'), {
   ssr: false,
   loading: () => <div className="w-full h-[560px] flex items-center justify-center text-sm text-gray-400">Loading map…</div>,
+});
+const RouteReplayMap = dynamic(() => import('@/src/components/fleet/RouteReplayMap'), {
+  ssr: false,
+  loading: () => <div className="w-full h-[220px] flex items-center justify-center text-sm text-gray-400">Loading route…</div>,
 });
 
 const STATUS_BADGE: Record<string, string> = {
@@ -80,6 +89,36 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
           </div>
         )}
       </div>
+
+      {/* Geofence debounce readout — real haversine distance + N-consecutive-fix
+          debounce (plan §7), not a flat timer. Only meaningful while en route. */}
+      {order?.status === 'EN_ROUTE' && (() => {
+        const debounce = getGeofenceDebounceState(order.id);
+        const insideCount = debounce.side === 'INSIDE' ? GEOFENCE_DEBOUNCE_TICKS : debounce.pendingSide === 'INSIDE' ? debounce.pendingCount : 0;
+        return (
+          <div className="flex items-center gap-2 text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+            <span className="text-gray-500">Geofence debounce (radius {destinationGeofenceRadiusM(order)}m):</span>
+            <span className="font-bold text-gray-800">{insideCount}/{GEOFENCE_DEBOUNCE_TICKS} fixes inside</span>
+          </div>
+        );
+      })()}
+
+      {/* Signed delivery QR — rotates on a timer, bound to this trip (plan §8) */}
+      {order && ['EN_ROUTE', 'ARRIVED'].includes(order.status) && (
+        <DeliveryQrPanel tripId={order.id} />
+      )}
+
+      {/* Route replay — drawn from real recorded telemetry_history (plan §5), not the live interpolation above */}
+      {order && truck && ['ARRIVED', 'COMPLETED'].includes(order.status) && (
+        <div className="rounded-xl overflow-hidden border border-gray-200">
+          <p className="text-xs font-bold text-gray-400 uppercase tracking-wide px-4 pt-3">Route Replay (recorded telemetry)</p>
+          <RouteReplayMap
+            points={getHistory(truck.id).map(p => ({ lat: p.lat, lng: p.lng }))}
+            roadRoute={getCachedRoadRoute(FIXED_DEPOT, destinationCoords(order))}
+            className="w-full h-[220px]"
+          />
+        </div>
+      )}
 
       {/* Compact compartment fuel */}
       <CompartmentFuel order={order ?? null} compact />

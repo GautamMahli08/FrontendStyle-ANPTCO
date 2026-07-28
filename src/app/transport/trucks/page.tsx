@@ -23,6 +23,7 @@ updateTruck,
 } from '@/src/lib/demo-data';
 
 import { downloadTruckQrPdf, truckQrDataUrl } from '@/src/lib/truck-qr';
+import { getAssignmentHistory } from '@/src/lib/device-assignment';
 
 export default function TransportTrucksPage() {
 
@@ -1104,6 +1105,26 @@ QR code will be generated after final platform approval.
 </div>
 
 }
+
+{/* Device Assignment History — time-versioned, not a single overwritable field (plan §1) */}
+<div className="bg-white rounded-lg p-4 border border-gray-200 mt-4">
+  <p className="text-sm font-semibold text-gray-800 mb-2">Device Assignment History</p>
+  {getAssignmentHistory(selectedTruck.id).length === 0 ? (
+    <p className="text-xs text-gray-400">No GPS/sensor device has been assigned to this truck yet.</p>
+  ) : (
+    <div className="space-y-2">
+      {getAssignmentHistory(selectedTruck.id).map((a, i) => (
+        <div key={i} className="flex items-center justify-between text-xs bg-gray-50 rounded-lg px-3 py-2">
+          <span className="font-mono text-gray-700">{a.deviceId}</span>
+          <span className="text-gray-400">{a.kind}</span>
+          <span className={`font-semibold ${a.validTo === null ? 'text-emerald-600' : 'text-gray-400'}`}>
+            {new Date(a.validFrom).toLocaleString()} → {a.validTo ? new Date(a.validTo).toLocaleString() : 'current'}
+          </span>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
 
 </div>
 

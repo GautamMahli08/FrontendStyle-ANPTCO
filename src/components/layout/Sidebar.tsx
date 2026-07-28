@@ -17,6 +17,7 @@ const nav: Record<UserRole, NavItem[]> = {
     { name: 'Tickets',            path: '/platform-admin/tickets',            icon: '🎫' },
     { name: 'Trucks',             path: '/platform-admin/trucks',             icon: '🚛' },
     { name: 'Users',              path: '/platform-admin/users',              icon: '👥' },
+    { name: 'ERP Integration',    path: '/platform-admin/erp-integration',    icon: '🔌' },
   ],
 
   SELLER_MANAGER: [

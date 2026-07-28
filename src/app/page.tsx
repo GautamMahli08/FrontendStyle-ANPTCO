@@ -75,17 +75,19 @@ const PERSONA_THEME: Record<string, { card: string; badge: string; iconBg: strin
   teal:   { card: 'border-teal-200   hover:border-teal-400   hover:bg-teal-50/50',      badge: 'bg-teal-100   text-teal-700',     iconBg: 'bg-teal-100   text-teal-600'     },
 };
 
-// Persona layout per product mode — hide platform admin, client 2 and driver from the
-// selector. Both modes keep the Seller Manager: in Monitoring-Only the seller loses the
-// marketplace screens but still owns full fleet monitoring (see Sidebar gating).
+// Persona layout per product mode. Full mode is the OOMCO/ANPTCO marketplace
+// (seller/client/generic transporters). Monitoring-Only is a single onboarded
+// tenant — XYZ Petroleum is the only account that exists on this platform in
+// that mode, matching the plan doc: the platform monitors XYZ's own fleet,
+// nothing else. (Its ERP dispatch console is a separate, unauthenticated
+// external-system link below the persona list, not a platform login.)
 const PERSONA_ROWS_BY_MODE: Record<ProductMode, string[][]> = {
   full: [
     ['client-001', 'seller-001'],
     ['tsp-001', 'tsp-002'],
   ],
   monitoring: [
-    ['client-001', 'seller-001'],
-    ['tsp-001', 'tsp-002'],
+    ['xyz-petroleum'],
   ],
 };
 
@@ -256,7 +258,7 @@ export default function Home() {
 
             <div className="space-y-2 max-w-3xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-3">
               {personaRows.map((row, ri) => (
-                <div key={ri} className={`grid gap-2 ${row.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
+                <div key={ri} className={`grid gap-2 ${row.length === 1 ? 'sm:grid-cols-1' : row.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
                   {row
                     .map(id => DEMO_PERSONAS.find(p => p.id === id))
                     .filter((persona): persona is typeof DEMO_PERSONAS[number] => Boolean(persona))
@@ -291,6 +293,26 @@ export default function Home() {
               ))}
             </div>
           </section>
+
+          {/* ── External system entry point (not part of the platform's own login) ──
+              Monitoring-Only only: this is XYZ's own ERP sending a dispatch, which
+              only makes sense in the single-tenant monitoring model, not the
+              Full Platform marketplace. */}
+          {mode === 'monitoring' && (
+            <section className="animate-fade-up stagger-3 max-w-3xl mx-auto w-full">
+              <button
+                onClick={() => router.push('/xyz-company/dashboard')}
+                className="w-full flex items-center gap-3 bg-slate-50 hover:bg-slate-100 border border-dashed border-slate-300 rounded-xl px-4 py-3 text-left transition-all"
+              >
+                <div className="w-8 h-8 rounded-lg bg-slate-200 text-slate-600 flex items-center justify-center text-base flex-shrink-0">🏢</div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-slate-700 font-semibold text-sm">XYZ Petroleum — ERP Dispatch Console</span>
+                  <p className="text-slate-400 text-xs mt-0.5">Simulates the external company sending a dispatch across the boundary — not a platform role</p>
+                </div>
+                <svg className="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
+              </button>
+            </section>
+          )}
 
         </main>
 

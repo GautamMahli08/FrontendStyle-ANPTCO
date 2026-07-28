@@ -243,6 +243,14 @@ export default function TransportReportsPage() {
   const completed      = filtered.filter(o => o.status === 'COMPLETED');
   const active         = filtered.filter(o => ['ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(o.status));
   const totalVolume    = completed.reduce((s, o) => s + (o.volume ?? 0), 0);
+  // Cargo (what XYZ pays for) vs vehicle fuel (what the truck itself burned) are
+  // different numbers — plan §9 calls out keeping them separate instead of
+  // reporting one "fuel consumed" line that conflates the two.
+  const withConfirmation = completed.filter(o => o.deliveryConfirmation);
+  const deliveredVolume  = withConfirmation.reduce((s, o) => s + (o.deliveryConfirmation?.deliveredVolumeL ?? o.volume ?? 0), 0);
+  const shortfallVolume  = withConfirmation.reduce((s, o) => s + (o.deliveryConfirmation?.shortfallL ?? 0), 0);
+  const VEHICLE_FUEL_BURN_L_PER_TRIP = 15; // ~15L diesel burned per depot→station run (plan §9 example)
+  const vehicleFuelBurnedL = completed.length * VEHICLE_FUEL_BURN_L_PER_TRIP;
   const completionRate = filtered.length > 0 ? Math.round((completed.length / filtered.length) * 100) : 0;
   const avgTripHours   = avgOf(completed.map(tripDurationHours));
   const dailyChart     = groupByDay(filtered);
@@ -425,6 +433,25 @@ export default function TransportReportsPage() {
                 <p className="text-xs text-gray-400 mt-1">{kpi.sub}</p>
               </div>
             ))}
+          </div>
+
+          {/* Cargo vs vehicle fuel — kept separate (plan §9), not one blended "fuel consumed" number */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+              <p className="text-xs font-medium text-blue-700 opacity-80">Cargo — expected → delivered</p>
+              <p className="text-xl font-bold text-blue-900 mt-1">{totalVolume.toLocaleString()}L → {deliveredVolume.toLocaleString()}L</p>
+              <p className="text-xs text-blue-600 mt-1">this is the money line</p>
+            </div>
+            <div className={`rounded-xl border p-4 ${shortfallVolume > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50'}`}>
+              <p className={`text-xs font-medium opacity-80 ${shortfallVolume > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>Cargo shortfall (reconciled)</p>
+              <p className={`text-xl font-bold mt-1 ${shortfallVolume > 0 ? 'text-amber-900' : 'text-emerald-900'}`}>{shortfallVolume.toLocaleString()}L</p>
+              <p className="text-xs text-gray-500 mt-1">across {withConfirmation.length} reconciled deliveries</p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+              <p className="text-xs font-medium text-gray-600 opacity-80">Vehicle fuel burned (diesel)</p>
+              <p className="text-xl font-bold text-gray-900 mt-1">~{vehicleFuelBurnedL.toLocaleString()}L</p>
+              <p className="text-xs text-gray-400 mt-1">a different number from cargo — the truck's own consumption</p>
+            </div>
           </div>
 
           {/* Secondary Stats */}

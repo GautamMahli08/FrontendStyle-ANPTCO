@@ -4,8 +4,16 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders, getTrucks, updateOrder, updateTruck, addNotification, shortOrderId } from '@/src/lib/demo-data';
-import { qrMatchesTruck } from '@/src/lib/truck-qr';
+import {
+  getCurrentUser, getOrders, getTrucks, updateOrder, updateTruck, addNotification, shortOrderId,
+  orderFuelTelemetry, destinationCoords,
+} from '@/src/lib/demo-data';
+import { verifyDeliveryQrToken } from '@/src/lib/qr-token';
+import { haversineDistanceM } from '@/src/lib/geo';
+import { getLiveState } from '@/src/lib/telemetry-store';
+import { reconcileDelivery } from '@/src/lib/theft-pipeline';
+import { sendWebhook } from '@/src/lib/webhooks';
+import { updateTripStatus as updateErpTripStatus } from '@/src/lib/dispatch-client';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
 import CompartmentFuel from '@/src/components/fleet/CompartmentFuel';
 
@@ -22,6 +30,9 @@ export default function ScanQRPage() {
   const [scanHint,  setScanHint]  = useState('Point camera at the QR code on the truck');
   const [rejecting,    setRejecting]    = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [scannerPos,   setScannerPos]   = useState<{ lat: number; lng: number } | null>(null);
+  const [verifying,    setVerifying]    = useState(false);
+  const [confirmation, setConfirmation] = useState<{ deliveredVolumeL: number; shortfallL: number; distanceM: number | null } | null>(null);
 
   const videoRef    = useRef<HTMLVideoElement>(null);
   const canvasRef   = useRef<HTMLCanvasElement>(null);
@@ -58,6 +69,15 @@ export default function ScanQRPage() {
   // ── Open camera ───────────────────────────────────────────────
   async function openCamera() {
     setCamError(null);
+    // Browsers only allow camera access on a "secure context" — HTTPS, or
+    // localhost. Opening this over plain http://<lan-ip>:3000 on a phone
+    // fails here regardless of the OS-level camera permission granted to the
+    // browser app, and the resulting error is otherwise indistinguishable
+    // from a real permission denial — so check this first and say so.
+    if (!window.isSecureContext) {
+      setCamError('❌ Camera access needs a secure connection (HTTPS or localhost) — this page was opened over plain HTTP, so the browser blocks the camera regardless of app permissions. Run `npm run dev:https` and open the https:// address instead.');
+      return;
+    }
     setStage('camera');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -104,26 +124,42 @@ export default function ScanQRPage() {
   }
 
   // ── QR code detected ─────────────────────────────────────────
-  function handleQRFound(qrData: string) {
-    const assignedId = order?.assignedTruckId ?? truck?.id ?? '';
+  // The scanned code is a short-lived, HMAC-signed token bound to THIS trip
+  // (src/lib/qr-token.ts) — not the truck's static printed ID. A photo of an
+  // old/expired code, or a code from a different order, is rejected outright.
+  async function handleQRFound(qrData: string) {
+    if (verifying || !order) return;
+    setVerifying(true);
+    const result = await verifyDeliveryQrToken(qrData, order.id);
+    setVerifying(false);
 
-    // The QR encodes the truck's ID — it must match THIS order's assigned truck.
-    if (qrMatchesTruck(qrData, { id: assignedId })) {
+    if (!result.valid) {
       stopCamera();
-      setScanHint('✓ Truck verified');
-      // Truck is verified — show the per-compartment fuel status so the client
-      // can review what's being delivered before accepting or rejecting.
-      setStage('review');
+      const messages: Record<string, string> = {
+        MALFORMED:     'This QR code is not a valid delivery code.',
+        BAD_SIGNATURE: 'This QR code failed signature verification — it may be forged.',
+        EXPIRED:       'This QR code has expired — ask the transporter to show the current one.',
+        WRONG_TRIP:    "This QR code doesn't match your delivery.",
+      };
+      setCamError(`❌ ${messages[result.reason ?? 'MALFORMED']}`);
+      setStage('idle');
       return;
     }
 
-    // A decoded code that is not our truck → real mismatch. Stop and report it
-    // without revealing the assigned truck's identity.
     stopCamera();
-    setCamError(
-      `❌ This QR code doesn't match your delivery. Please scan the QR code on the truck for this order.`
-    );
-    setStage('idle');
+    setScanHint('✓ Truck verified');
+    // Capture the scanner's own GPS at the moment of a valid scan (plan §8) —
+    // best-effort; a denied/unavailable location doesn't block the flow.
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        pos => setScannerPos({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => setScannerPos(null),
+        { timeout: 5000 },
+      );
+    }
+    // Truck is verified — show the per-compartment fuel status so the client
+    // can review what's being delivered before accepting or rejecting.
+    setStage('review');
   }
 
   // ── Confirm delivery ──────────────────────────────────────────
@@ -131,13 +167,62 @@ export default function ScanQRPage() {
     if (!order) return;
     setStage('processing');
     setTimeout(() => {
-      updateOrder(order.id, { status: 'COMPLETED', completedAt: new Date() });
+      // Reconcile expected_volume_l (dispatch) against the sensor-measured
+      // delivered volume (plan §4/§8) — the shortfall is the money line.
+      const deliveredVolumeL = orderFuelTelemetry(order).totalVolume;
+      const expectedVolumeL = order.volume ?? 0;
+      const reconciliation = reconcileDelivery(expectedVolumeL, deliveredVolumeL);
+
+      const truckPos = order.assignedTruckId ? getLiveState(order.assignedTruckId) : undefined;
+      const dest = destinationCoords(order);
+      const truckLat = truckPos?.lat ?? dest.lat;
+      const truckLng = truckPos?.lng ?? dest.lng;
+      const distanceM = scannerPos ? Math.round(haversineDistanceM(scannerPos, { lat: truckLat, lng: truckLng })) : null;
+
+      const deliveryConfirmation = {
+        confirmedAt: new Date().toISOString(),
+        scannerLat: scannerPos?.lat ?? null,
+        scannerLng: scannerPos?.lng ?? null,
+        truckLat, truckLng,
+        distanceM,
+        deliveredVolumeL,
+        shortfallL: reconciliation.shortfallL,
+      };
+
+      updateOrder(order.id, { status: 'COMPLETED', completedAt: new Date(), deliveryConfirmation });
+      setConfirmation({ deliveredVolumeL, shortfallL: reconciliation.shortfallL, distanceM });
       if (order.assignedTruckId) updateTruck(order.assignedTruckId, { status: 'IDLE' });
+
+      if (order.erpTripId) {
+        void updateErpTripStatus(order.erpTripId, 'DELIVERED');
+        void updateErpTripStatus(order.erpTripId, 'CLOSED');
+      }
+      void sendWebhook({
+        event: 'delivery.confirmed',
+        trip_id: order.erpTripId ?? order.id,
+        erp_dispatch_no: order.erpDispatchNo ?? order.id,
+        occurred_at: new Date().toISOString(),
+        data: {
+          expected_volume_l: expectedVolumeL,
+          delivered_volume_l: deliveredVolumeL,
+          shortfall_l: reconciliation.shortfallL,
+          confirmation: { distance_m: distanceM, method: 'qr_signed' },
+        },
+      });
+      if (reconciliation.suspicious) {
+        void sendWebhook({
+          event: 'theft.alert',
+          trip_id: order.erpTripId ?? order.id,
+          erp_dispatch_no: order.erpDispatchNo ?? order.id,
+          occurred_at: new Date().toISOString(),
+          data: { reasoning: reconciliation.reasoning, driver: order.assignedDriverName, driver_phone: order.assignedDriverPhone },
+        });
+      }
 
       logDemoEvent(
         user?.id ?? 'client',
         'DELIVERY_CONFIRMED',
-        `orderId=${order.id} | truck=${truck?.registrationNumber} | qrCode=${truck?.qrCode}`
+        `orderId=${order.id} | truck=${truck?.registrationNumber} | delivered=${deliveredVolumeL}L | shortfall=${reconciliation.shortfallL}L`
       );
 
       if (order.assignedDriverId) {
@@ -230,8 +315,16 @@ export default function ScanQRPage() {
               <h2 className="text-2xl font-black text-gray-900 mb-2">Delivery Confirmed</h2>
               <p className="text-gray-500 text-sm mb-1">Order #{shortOrderId(order?.id)} completed.</p>
               <p className="text-gray-400 text-xs mb-1">
-                {order?.volume?.toLocaleString()}L {order?.fuelType} received
+                {order?.volume?.toLocaleString()}L {order?.fuelType} expected · {confirmation?.deliveredVolumeL.toLocaleString()}L delivered
               </p>
+              {confirmation && confirmation.shortfallL > 0 && (
+                <p className="text-xs mb-1 font-semibold text-amber-600">
+                  ⚠ {confirmation.shortfallL}L shortfall reconciled against expected volume
+                </p>
+              )}
+              {confirmation?.distanceM != null && (
+                <p className="text-gray-400 text-xs mb-1">Scanner was {confirmation.distanceM}m from the truck at scan time</p>
+              )}
               <p className="text-gray-400 text-xs mb-8">
                 📧 A delivery confirmation has been sent to <span className="font-semibold text-gray-500">{user.email}</span>
               </p>

@@ -264,6 +264,21 @@ export interface Order {
   updatedAt?:     Date;
   acceptedAt?:    Date;
   scheduledDeliveryTime?: Date;
+
+  // ERP dispatch/monitoring boundary (see xyz-petroleum-monitoring-plan.md)
+  erpDispatchNo?:   string;
+  erpTripId?:       string;
+  geofenceRadiusM?: number;
+  deliveryConfirmation?: {
+    confirmedAt: string;
+    scannerLat: number | null;
+    scannerLng: number | null;
+    truckLat: number;
+    truckLng: number;
+    distanceM: number | null;
+    deliveredVolumeL: number;
+    shortfallL: number;
+  };
 }
 
 // ── Truck Assignment ──────────────────────────────────────────

@@ -17,6 +17,7 @@ getTrucks,
 addNotification,
 
 } from '@/src/lib/demo-data';
+import { assignDevice } from '@/src/lib/device-assignment';
 
 const PENDING_STATUSES = [
 'PENDING_ADMIN_APPROVAL'
@@ -219,6 +220,10 @@ new Date(),
 }
 
 );
+
+// Time-versioned device↔truck record (plan §1) — append-only, so a device
+// that later moves to another truck never overwrites this truck's history.
+assignDevice(request.truckId, deviceId, 'GPS');
 
 // ── Update Sensor Request ──
 

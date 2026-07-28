@@ -16,9 +16,14 @@ import {
   ProductMode,
   ProductModules,
 } from '@/src/types';
+import { isInsideGeofence, initialDebounceState, stepDebounce, DebounceState } from './geo';
+import { getCachedRoadRoute, routePosition } from './route-geometry';
+import { ingestTelemetry } from './telemetry-store';
+import { sendWebhook } from './webhooks';
+import { updateTripStatus as updateErpTripStatus } from './dispatch-client';
 
 // ── Demo version — bump this to force a full localStorage reset ──
-const DEMO_VERSION = 'v3.6';
+const DEMO_VERSION = 'v3.7';
 const VERSION_KEY  = 'fuel_demo_version';
 
 // Product mode is intentionally a standalone key (not in STORAGE_KEYS) so it
@@ -212,6 +217,38 @@ const DEMO_DRIVERS: Driver[] = [
     currentStatus: 'AVAILABLE',
     createdAt: new Date('2026-01-25'),
   },
+  {
+    id: 'driver-xyz-1',
+    email: 'driver1@xyzpetroleum.com',
+    password: 'driver123',
+    firstName: 'Ahmed',
+    lastName: 'Al-Balushi',
+    phone: '+968 9555 1010',
+    licenseNumber: 'DL-OM-101',
+    tspId: 'xyz-petroleum',
+    tspName: 'XYZ Petroleum LLC',
+    workspaceId: 'ws-xyz-petroleum',
+    verified: true,
+    assignedTruckId: 'truck-xyz-1',
+    currentStatus: 'AVAILABLE',
+    createdAt: new Date('2026-02-01'),
+  },
+  {
+    id: 'driver-xyz-2',
+    email: 'driver2@xyzpetroleum.com',
+    password: 'driver123',
+    firstName: 'Salim',
+    lastName: 'Al-Harthy',
+    phone: '+968 9555 2020',
+    licenseNumber: 'DL-OM-102',
+    tspId: 'xyz-petroleum',
+    tspName: 'XYZ Petroleum LLC',
+    workspaceId: 'ws-xyz-petroleum',
+    verified: true,
+    assignedTruckId: 'truck-xyz-2',
+    currentStatus: 'AVAILABLE',
+    createdAt: new Date('2026-02-01'),
+  },
 ];
 
 // ── Demo Workspaces ───────────────────────────────────────────
@@ -223,6 +260,17 @@ const DEMO_WORKSPACES: Workspace[] = [
     type: 'SELLER',
     ownerId: 'seller-001',
     createdAt: new Date('2026-01-01'),
+  },
+  // A separate tenant onboarded specifically for Monitoring-Only (plan doc
+  // Step 1: "Platform Admin creates a Workspace → Tenant"). Its trucks/drivers
+  // and account are isolated from the ws-anptco marketplace tenant.
+  {
+    id: 'ws-xyz-petroleum',
+    name: 'XYZ Petroleum LLC',
+    slug: 'xyz-petroleum',
+    type: 'TRANSPORT',
+    ownerId: 'xyz-petroleum',
+    createdAt: new Date('2026-02-01'),
   },
 ];
 
@@ -279,6 +327,19 @@ const DEMO_USERS: User[] = [
     role: 'CLIENT',
     workspaceId: 'ws-anptco',
     companyName: 'Client Corp 2',
+    verified: true,
+  },
+  // Monitoring-Only tenant — the account XYZ Petroleum itself logs into on
+  // this platform to watch their own fleet. Their trucks/drivers below are
+  // registered under ws-xyz-petroleum, not the ws-anptco marketplace tenant.
+  {
+    id: 'xyz-petroleum',
+    email: 'ops@xyzpetroleum.com',
+    firstName: 'XYZ',
+    lastName: 'Petroleum',
+    role: 'TRANSPORT_ADMIN',
+    workspaceId: 'ws-xyz-petroleum',
+    companyName: 'XYZ Petroleum LLC',
     verified: true,
   },
 ];
@@ -353,6 +414,46 @@ const DEMO_TRUCKS: Truck[] = [
     currentLat: 23.670250,
     currentLng: 58.189120,
     createdAt: new Date('2026-02-08'),
+  },
+  // XYZ Petroleum's own fleet — registered under ws-xyz-petroleum, the
+  // Monitoring-Only tenant, not the ws-anptco marketplace tenant above.
+  {
+    id: 'truck-xyz-1',
+    registrationNumber: 'TRK-101',
+    assignedDriverId: 'driver-xyz-1',
+    tspId: 'xyz-petroleum',
+    tspName: 'XYZ Petroleum LLC',
+    workspaceId: 'ws-xyz-petroleum',
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
+    status: 'IDLE',
+    currentLat: 23.670250,
+    currentLng: 58.189120,
+    qrCode: 'QR-TRK-101',
+    galileoskyDeviceId: 'GSKY-XYZ-101',
+    sensorConfigured: true,
+    commercialApproval: true,
+    safetyApproval: true,
+    createdAt: new Date('2026-02-01'),
+  },
+  {
+    id: 'truck-xyz-2',
+    registrationNumber: 'TRK-102',
+    assignedDriverId: 'driver-xyz-2',
+    tspId: 'xyz-petroleum',
+    tspName: 'XYZ Petroleum LLC',
+    workspaceId: 'ws-xyz-petroleum',
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
+    status: 'IDLE',
+    currentLat: 23.670250,
+    currentLng: 58.189120,
+    qrCode: 'QR-TRK-102',
+    galileoskyDeviceId: 'GSKY-XYZ-102',
+    sensorConfigured: true,
+    commercialApproval: true,
+    safetyApproval: true,
+    createdAt: new Date('2026-02-01'),
   },
 ];
 
@@ -958,11 +1059,81 @@ export function advanceLoading(): boolean {
   return changed;
 }
 
-/** Flip any EN_ROUTE order whose journey has elapsed to ARRIVED (truck reached the station). */
+/** Radius (metres) of the destination geofence — order-specific if set, else the station's own, else a tenant default. */
+export function destinationGeofenceRadiusM(order: any): number {
+  if (typeof order?.geofenceRadiusM === 'number') return order.geofenceRadiusM;
+  const zone = DELIVERY_ZONES.find(z => z.id === order?.destination);
+  return zone?.radius ?? FIXED_DEPOT.geofenceRadius;
+}
+
+const GEOFENCE_DEBOUNCE_KEY = 'order_geofence_debounce';
+
+function readGeofenceDebounceMap(): Record<string, DebounceState> {
+  if (typeof window === 'undefined') return {};
+  try { return JSON.parse(localStorage.getItem(GEOFENCE_DEBOUNCE_KEY) ?? '{}'); } catch { return {}; }
+}
+
+function writeGeofenceDebounceMap(map: Record<string, DebounceState>) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(GEOFENCE_DEBOUNCE_KEY, JSON.stringify(map));
+}
+
+/** Current geofence debounce readout for an order (for the "N/3 fixes inside" UI). */
+export function getGeofenceDebounceState(orderId: string): DebounceState {
+  return readGeofenceDebounceMap()[orderId] ?? initialDebounceState();
+}
+
+/**
+ * Flip any EN_ROUTE order to ARRIVED once its truck has genuinely entered the
+ * destination geofence — replacing the old flat "60s timer = arrived" stand-in.
+ * Position is the same depot→destination interpolation the map already draws,
+ * with light GPS jitter; each tick is recorded as real telemetry (plan §5) and
+ * tested against the geofence radius with ENTER debounced over N consecutive
+ * fixes (plan §7) so jitter near the boundary can't flap the state.
+ */
 export function advanceJourneys(): boolean {
   let changed = false;
+  const debounceMap = readGeofenceDebounceMap();
+  const trucks = getTrucks();
+
   getOrders().forEach((o: any) => {
-    if (o.status === 'EN_ROUTE' && journeyProgress(o) >= 1) {
+    if (o.status !== 'EN_ROUTE') return;
+
+    const truck = trucks.find(t => t.id === o.assignedTruckId);
+    const t = journeyProgress(o);
+    const dest = destinationCoords(o);
+
+    // Follow the actual road geometry (same OSRM path the live map draws) once
+    // it's fetched; a straight-line lerp is only the fallback for the first
+    // tick or two before the route arrives, so recorded telemetry — and
+    // anything built on it, like route replay — matches roads, not a
+    // depot-to-destination beeline.
+    const roadRoute = getCachedRoadRoute(FIXED_DEPOT, dest);
+    const position = roadRoute
+      ? routePosition(roadRoute, t)
+      : { lat: FIXED_DEPOT.lat + (dest.lat - FIXED_DEPOT.lat) * t, lng: FIXED_DEPOT.lng + (dest.lng - FIXED_DEPOT.lng) * t };
+    const lat = position.lat + (Math.random() - 0.5) * 0.0006;
+    const lng = position.lng + (Math.random() - 0.5) * 0.0006;
+
+    if (o.assignedTruckId) {
+      const { readings } = orderFuelTelemetry(o);
+      ingestTelemetry({
+        truckId:  o.assignedTruckId,
+        deviceId: truck?.galileoskyDeviceId ?? `IMEI-${o.assignedTruckId}`,
+        lat, lng,
+        speed:    t < 1 ? 55 + Math.random() * 15 : 0,
+        ignition: t < 1,
+        ts:       Date.now(),
+        compartmentVolumes: readings.map(r => r.volume),
+      });
+    }
+
+    const radius = destinationGeofenceRadiusM(o);
+    const inside = isInsideGeofence({ lat, lng }, dest, radius);
+    const { state: nextState, flipped } = stepDebounce(debounceMap[o.id] ?? initialDebounceState(), inside);
+    debounceMap[o.id] = nextState;
+
+    if (flipped && nextState.side === 'INSIDE') {
       updateOrder(o.id, { status: 'ARRIVED', arrivedAt: new Date() });
       if (o.assignedTruckId) updateTruck(o.assignedTruckId, { status: 'ARRIVED' });
       // The truck reached the station on its own — prompt the client to scan the QR.
@@ -978,9 +1149,19 @@ export function advanceJourneys(): boolean {
           createdAt: new Date(),
         } as any);
       }
+      if (o.erpTripId) void updateErpTripStatus(o.erpTripId, 'ARRIVED');
+      void sendWebhook({
+        event: 'trip.arrived',
+        trip_id: o.erpTripId ?? o.id,
+        erp_dispatch_no: o.erpDispatchNo ?? o.id,
+        occurred_at: new Date().toISOString(),
+        data: { destination: dest, travel_time_min: Math.round((JOURNEY_DURATION_MS / 1000) / 60) },
+      });
       changed = true;
     }
   });
+
+  writeGeofenceDebounceMap(debounceMap);
   return changed;
 }
 
@@ -1298,5 +1479,17 @@ export const DEMO_PERSONAS = [
     color: 'teal',
     icon: '👤',
     description: 'Truck TRK-001 — Transporter 1 driver',
+  },
+  {
+    id: 'xyz-petroleum',
+    label: 'XYZ Petroleum',
+    name: 'XYZ Petroleum LLC',
+    email: 'ops@xyzpetroleum.com',
+    password: 'xyz123',
+    role: 'TRANSPORT_ADMIN' as const,
+    route: '/transport/dashboard',
+    color: 'orange',
+    icon: '🛢️',
+    description: 'Monitoring-Only tenant — 2 trucks, own fleet',
   },
 ];

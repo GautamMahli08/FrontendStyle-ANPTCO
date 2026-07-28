@@ -7,13 +7,18 @@ import Header  from '@/src/components/layout/Header';
 import {
   getCurrentUser, getOrders, getTrucks, getDrivers,
   updateOrder, updateTruck, addNotification,
-  addFuelAnomaly, orderFuelBreakdown, shortOrderId,
+  addFuelAnomaly, getFuelAnomalies, orderFuelBreakdown, shortOrderId,
   advanceJourneys, advanceLoading,
+  FIXED_DEPOT, destinationCoords, destinationGeofenceRadiusM, orderFuelTelemetry,
 } from '@/src/lib/demo-data';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
 import OrderTimeline from '@/src/components/orders/OrderTimeline';
 import CompartmentFuel from '@/src/components/fleet/CompartmentFuel';
 import CopyId from '@/src/components/ui/CopyId';
+import { dispatchTrip, updateTripStatus as updateErpTripStatus } from '@/src/lib/dispatch-client';
+import { sendWebhook } from '@/src/lib/webhooks';
+import { ingestTelemetry, getHistory } from '@/src/lib/telemetry-store';
+import { evaluateTheftRisk } from '@/src/lib/theft-pipeline';
 
 const STATUS_LABEL: Record<string, string> = {
   ASSIGNED_TO_TSP: 'Needs Truck',
@@ -49,10 +54,13 @@ export default function TransportOrdersPage() {
   const [orders,         setOrders]         = useState<any[]>([]);
   const [trucks,         setTrucks]         = useState<any[]>([]);
   const [drivers,        setDrivers]        = useState<any[]>([]);
+  const [anomalies,      setAnomalies]      = useState<any[]>([]);
   const [mounted,        setMounted]        = useState(false);
   const [detailId,       setDetailId]       = useState<string | null>(null);
   const [assigning,      setAssigning]      = useState<any>(null);   // order being assigned a truck (modal)
   const [selectedTruck,  setSelectedTruck]  = useState('');
+  const [assignPending,  setAssignPending]  = useState(false);
+  const [assignError,    setAssignError]    = useState<string | null>(null);
   const [journeyLoading, setJourneyLoading] = useState<string | null>(null);
 
   const loadData = useCallback((u: any) => {
@@ -63,6 +71,7 @@ export default function TransportOrdersPage() {
     );
     setTrucks(getTrucks().filter((t: any) => t.tspId === u.id));
     setDrivers(getDrivers().filter((d: any) => d.tspId === u.id));
+    setAnomalies(getFuelAnomalies());
   }, []);
 
   useEffect(() => {
@@ -79,7 +88,7 @@ export default function TransportOrdersPage() {
   if (!mounted || !user) return null;
 
   // ── Assign truck to order ─────────────────────────────────
-  const handleAssignTruck = () => {
+  const handleAssignTruck = async () => {
     if (!selectedTruck || !assigning) return;
     const truck = trucks.find((t: any) => t.id === selectedTruck);
     if (!truck) return;
@@ -87,6 +96,38 @@ export default function TransportOrdersPage() {
     // No capacity check needed — every truck is a fixed 4 × 9,100 L layout and
     // orders are capped at 4 compartments, so any truck can carry any order.
     const driver = drivers.find((d: any) => d.id === truck.assignedDriverId);
+
+    setAssignPending(true);
+    setAssignError(null);
+
+    // Real ERP dispatch call FIRST (plan §3) — truck_ref, expected cargo
+    // volume and origin/destination cross the boundary here. Only commit the
+    // local assignment (and mark the truck busy) if the platform actually
+    // accepts it — a truck must never look assigned locally for a dispatch
+    // the server rejected (e.g. 409, already on an active trip); it can't go
+    // out on a second delivery until its current one is complete.
+    const dest = destinationCoords(assigning);
+    const result = await dispatchTrip({
+      truckRef: truck.registrationNumber,
+      driverRef: driver?.id,
+      erpDispatchNo: assigning.id,
+      expectedVolumeL: assigning.volume ?? 0,
+      product: typeof assigning.fuelType === 'string' ? assigning.fuelType : undefined,
+      origin: { name: FIXED_DEPOT.name, latitude: FIXED_DEPOT.lat, longitude: FIXED_DEPOT.lng },
+      destination: {
+        name: assigning.destinationName ?? 'Destination',
+        latitude: dest.lat,
+        longitude: dest.lng,
+        geofenceRadiusM: destinationGeofenceRadiusM(assigning),
+      },
+    });
+    logDemoEvent(user.id, 'ERP_DISPATCH', `orderId=${assigning.id} | trip=${result.tripId ?? 'n/a'} | status=${result.status} | replay=${!!result.replay}`);
+
+    setAssignPending(false);
+    if (!result.ok) {
+      setAssignError(`Dispatch rejected: HTTP ${result.status} — ${result.error ?? 'truck may already be on an active trip'}`);
+      return;
+    }
 
     updateOrder(assigning.id, {
       status:                    'ASSIGNED',
@@ -96,6 +137,8 @@ export default function TransportOrdersPage() {
       assignedDriverName:        driver ? `${driver.firstName} ${driver.lastName}` : 'Driver TBD',
       assignedDriverPhone:       driver?.phone ?? '',
       truckAssignedAt:           new Date(),
+      erpDispatchNo:             assigning.id,
+      erpTripId:                 result.tripId,
     });
     updateTruck(truck.id, { status: 'ASSIGNED' });
     logDemoEvent(user.id, 'TRUCK_ASSIGNED', `orderId=${assigning.id} | truck=${truck.registrationNumber} | driver=${driver?.firstName ?? 'TBD'} | clientId=${assigning.clientId}`);
@@ -143,28 +186,7 @@ export default function TransportOrdersPage() {
       read: false, createdAt: new Date(),
     });
 
-    // ── Theft simulation for Client 2 ──
-    if (order.clientId === 'client-002') {
-      setTimeout(() => {
-        addFuelAnomaly({
-          id:             `anomaly-${Date.now()}`,
-          orderId:        order.id,
-          truckReg:       order.assignedTruckRegistration ?? 'TRK',
-          compartment:    'C1 (Petrol)',
-          fuelDropLiters: 320,
-          location:       'Al Khuwair — off-route stop, 18 min',
-          detectedAt:     new Date(),
-          severity:       'HIGH',
-          status:         'OPEN',
-        });
-        addNotification({
-          id: `notif-theft-${Date.now()}`, userId: 'seller-001',
-          type: 'FUEL_ANOMALY', title: '🚨 Fuel Anomaly Detected',
-          message: `Unexpected fuel drop of 320L on truck ${order.assignedTruckRegistration} (C1 Petrol) during Order #${shortOrderId(order.id)}. Location: Al Khuwair.`,
-          read: false, createdAt: new Date(),
-        });
-      }, 3000);
-    }
+    if (order.erpTripId) void updateErpTripStatus(order.erpTripId, 'EN_ROUTE');
 
     // Hand off to the Fleet Monitor focused on this order so the TSP can watch
     // the truck drive to the station live.
@@ -172,6 +194,71 @@ export default function TransportOrdersPage() {
       setJourneyLoading(null);
       router.push(`/transport/fleet-monitor?order=${order.id}`);
     }, 500);
+  };
+
+  // ── Theft scenario trigger (demo) ─────────────────────────
+  // Real BLE fuel data is noisy, so ambient sensor jitter alone won't cross the
+  // theft-pipeline's threshold (by design — see src/lib/theft-pipeline.ts). This
+  // button injects a realistic stationary, off-geofence fuel-drop reading into
+  // the truck's actual telemetry stream so the pipeline can detect it for real
+  // — the anomaly's reasoning trail below is computed, not scripted.
+  const handleSimulateTheft = (order: any) => {
+    if (!order.assignedTruckId) return;
+    const truck = trucks.find((t: any) => t.id === order.assignedTruckId);
+    const deviceId = truck?.galileoskyDeviceId ?? `IMEI-${order.assignedTruckId}`;
+    const dest = destinationCoords(order);
+    const offRoute = { lat: dest.lat + 0.15, lng: dest.lng + 0.12 }; // well outside any geofence
+    const baseline = orderFuelTelemetry(order).totalVolume;
+    const now = Date.now();
+
+    // Two consecutive readings at the dropped level (not just one) so the
+    // pipeline's moving-median smoothing — which exists precisely to reject a
+    // single noisy blip — reflects a genuine sustained drop instead of
+    // averaging it away against the truck's recent high baseline readings.
+    const droppedVolume = Math.max(0, baseline - 320);
+    ingestTelemetry({ truckId: order.assignedTruckId, deviceId, lat: offRoute.lat, lng: offRoute.lng, speed: 0, ignition: false, ts: now - 4000, compartmentVolumes: [droppedVolume] });
+    ingestTelemetry({ truckId: order.assignedTruckId, deviceId, lat: offRoute.lat, lng: offRoute.lng, speed: 0, ignition: false, ts: now, compartmentVolumes: [droppedVolume] });
+
+    const evaluation = evaluateTheftRisk(getHistory(order.assignedTruckId).slice(-5), {
+      depot: { center: FIXED_DEPOT, radiusM: FIXED_DEPOT.geofenceRadius },
+      destination: { center: dest, radiusM: destinationGeofenceRadiusM(order) },
+    });
+
+    if (!evaluation.suspicious) {
+      alert(`Pipeline evaluated the drop and did NOT flag it:\n${evaluation.reasoning.join('\n')}`);
+      return;
+    }
+
+    addFuelAnomaly({
+      id:             `anomaly-${now}`,
+      orderId:        order.id,
+      truckReg:       order.assignedTruckRegistration ?? 'TRK',
+      compartment:    'All compartments',
+      fuelDropLiters: Math.round(evaluation.dropLiters),
+      location:       evaluation.reasoning.join(' · '),
+      detectedAt:     new Date(),
+      severity:       'HIGH',
+      status:         'OPEN',
+    });
+    addNotification({
+      id: `notif-theft-${now}`, userId: 'seller-001',
+      type: 'FUEL_ANOMALY', title: '🚨 Fuel Anomaly Detected',
+      message: `Unexpected fuel drop of ${Math.round(evaluation.dropLiters)}L on truck ${order.assignedTruckRegistration} during Order #${shortOrderId(order.id)}. ${evaluation.reasoning[evaluation.reasoning.length - 1]}.`,
+      read: false, createdAt: new Date(),
+    });
+    void sendWebhook({
+      event: 'theft.alert',
+      trip_id: order.erpTripId ?? order.id,
+      erp_dispatch_no: order.erpDispatchNo ?? order.id,
+      occurred_at: new Date().toISOString(),
+      data: {
+        drop_liters: Math.round(evaluation.dropLiters),
+        reasoning: evaluation.reasoning,
+        driver: order.assignedDriverName,
+        driver_phone: order.assignedDriverPhone,
+      },
+    });
+    loadData(user);
   };
 
   const idleTrucks = trucks.filter((t: any) => ['IDLE', 'ACTIVE'].includes(t.status));
@@ -231,7 +318,7 @@ export default function TransportOrdersPage() {
                 {orders.map(order => {
                   const isOpen = detailId === order.id;
                   const truck  = trucks.find(t => t.id === order.assignedTruckId);
-                  const theft  = order.clientId === 'client-002' && order.status === 'EN_ROUTE';
+                  const theft  = anomalies.some(a => a.orderId === order.id && a.status !== 'RESOLVED');
                   return (
                     <div key={order.id}>
                       {/* Summary row */}
@@ -259,7 +346,7 @@ export default function TransportOrdersPage() {
                           <div className="flex flex-wrap items-center gap-1.5">
                             {order.status === 'ASSIGNED_TO_TSP' && (
                               <button
-                                onClick={() => { setAssigning(order); setSelectedTruck(''); }}
+                                onClick={() => { setAssigning(order); setSelectedTruck(''); setAssignError(null); }}
                                 className="text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg transition"
                               >
                                 Assign truck
@@ -293,6 +380,15 @@ export default function TransportOrdersPage() {
                                 className="text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-1.5 rounded-lg transition"
                               >
                                 {order.status === 'COMPLETED' ? 'View' : 'Track'}
+                              </button>
+                            )}
+                            {order.status === 'EN_ROUTE' && !theft && (
+                              <button
+                                onClick={() => handleSimulateTheft(order)}
+                                title="Injects a real stationary, off-geofence fuel-drop reading and runs the theft pipeline against it"
+                                className="text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-lg transition"
+                              >
+                                Simulate off-route stop
                               </button>
                             )}
                             {order.status === 'CANCELLED' && <span className="text-xs text-gray-400">—</span>}
@@ -356,7 +452,7 @@ export default function TransportOrdersPage() {
           <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-lg font-black text-gray-900">Assign Truck</h3>
-              <button onClick={() => setAssigning(null)} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition">✕</button>
+              <button onClick={() => { setAssigning(null); setAssignError(null); }} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition">✕</button>
             </div>
 
             <div className="bg-slate-50 rounded-xl p-4 mb-5 border border-slate-200">
@@ -412,16 +508,20 @@ export default function TransportOrdersPage() {
               </div>
             )}
 
+            {assignError && (
+              <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3">{assignError}</p>
+            )}
+
             <div className="flex gap-3">
-              <button onClick={() => setAssigning(null)} className="flex-1 border border-gray-200 text-gray-700 font-medium py-2.5 rounded-xl hover:bg-gray-50 transition text-sm">
+              <button onClick={() => { setAssigning(null); setAssignError(null); }} className="flex-1 border border-gray-200 text-gray-700 font-medium py-2.5 rounded-xl hover:bg-gray-50 transition text-sm">
                 Cancel
               </button>
               <button
                 onClick={handleAssignTruck}
-                disabled={!selectedTruck}
+                disabled={!selectedTruck || assignPending}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-bold py-2.5 rounded-xl transition text-sm"
               >
-                Confirm Assignment
+                {assignPending ? 'Dispatching…' : 'Confirm Assignment'}
               </button>
             </div>
           </div>
