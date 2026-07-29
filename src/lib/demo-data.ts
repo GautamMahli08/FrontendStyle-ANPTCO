@@ -1234,7 +1234,7 @@ export function advanceJourneys(): boolean {
 // component already behaves the way it will once wired to the real feed.
 export const TELEMETRY_INTERVAL_MS = 2_000;   // simulated flespi push cadence
 export const LOADING_DURATION_MS   = 8_000;   // depot fill time (compartments filling)
-export const OFFLOAD_DURATION_MS   = 10_000;  // station drain time (offloading)
+export const OFFLOAD_DURATION_MS   = 35_000;  // station drain time (offloading)
 
 // ── Theft scenario (Station B) ───────────────────────────────
 // Deliveries to Station B are the "things go wrong" path: the truck pulls off the
