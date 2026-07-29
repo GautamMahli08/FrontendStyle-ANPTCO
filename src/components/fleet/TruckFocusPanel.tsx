@@ -22,6 +22,7 @@ const STATUS_BADGE: Record<string, string> = {
   EN_ROUTE:  'bg-blue-100    text-blue-700',
   ARRIVED:   'bg-teal-100    text-teal-700',
   COMPLETED: 'bg-emerald-100 text-emerald-700',
+  DELIVERY_FAILED: 'bg-red-100 text-red-700',
 };
 
 /**
@@ -47,12 +48,19 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
         })(),
         startedAt:  order.tripStartedAt ? new Date(order.tripStartedAt).getTime() : Date.now(),
         durationMs: JOURNEY_DURATION_MS,
+        // A truck halted at an unauthorized stop must pin there, not keep sliding
+        // toward the destination — otherwise this view contradicts the overview map.
+        halted: !!order.stoppedAt,
+        at: order.stoppedAt && order.stoppedLat != null
+          ? { lat: order.stoppedLat, lng: order.stoppedLng }
+          : undefined,
       }]
     : [];
 
   // Placeholder shown in place of the map when the truck isn't on the road.
   const placeholder = (() => {
     if (!order)                        return { icon: '🅿️', title: 'Idle at depot', sub: 'No active order assigned' };
+    if (status === 'DELIVERY_FAILED')  return { icon: '🚨', title: 'Delivery aborted', sub: order.failureReason ?? 'Unauthorized activity detected' };
     if (status === 'ASSIGNED')         return { icon: '🏭', title: 'At depot', sub: 'Awaiting fuel loading' };
     if (status === 'LOADING')          return { icon: '🛢️', title: 'At depot', sub: 'Loading fuel into compartments' };
     if (status === 'LOADED')           return { icon: '🛢️', title: 'At depot', sub: 'Loaded — ready to depart' };
@@ -84,8 +92,15 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
         )}
       </div>
 
-      {/* Compact compartment fuel */}
-      <CompartmentFuel order={order ?? null} compact />
+      {/* Compact compartment fuel.
+          Keyed by order on purpose. The tank bars carry a CSS height transition, and
+          their React keys are compartment indexes (1-4) which are identical for every
+          order — so switching trucks reuses the same <div>s and animates from the
+          previous truck's levels to this one's. That reads as a phantom drain/refill
+          on a truck whose fuel never changed. A new key remounts them, so the new
+          levels paint directly; within one order the key is stable and the real
+          load/siphon/offload animations still play. */}
+      <CompartmentFuel key={order?.id ?? 'idle'} order={order ?? null} compact />
 
       {/* Details + timeline — split within one card, using the full width */}
       {order && (

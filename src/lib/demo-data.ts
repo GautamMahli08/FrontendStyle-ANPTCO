@@ -17,6 +17,9 @@ import {
   ProductModules,
   UserRole,
 } from '@/src/types';
+import { ingestTelemetry, getHistory, clearTelemetry } from './telemetry-store';
+import { evaluateTheftRisk, DETECTION_WINDOW } from './theft-pipeline';
+import { getCachedRoadRoute, routePosition } from './route-geometry';
 
 // ── Demo version — bump this to force a full localStorage reset ──
 const DEMO_VERSION = 'v3.7';
@@ -46,42 +49,69 @@ export function makeStandardCompartments(): Compartment[] {
   }));
 }
 
-// ── Fuel Anomaly (theft detection) ───────────────────────────
-export interface FuelAnomaly {
-  id: string;
-  orderId: string;
-  truckReg: string;
-  compartment: string;
-  fuelDropLiters: number;
-  location: string;
+// ── Fleet alerts ─────────────────────────────────────────────
+// One feed for anything the monitoring engine flags on a live trip. Two kinds so
+// far, and the distinction is the whole point of the detector: a truck stopping is
+// *suspicious* (drivers stop for traffic, rest, fuel), whereas fuel leaving the tank
+// while stopped outside every geofence is *conclusive*. They get different severities
+// and different actions — see docs/PRODUCT_MODES.md §7.
+export type AlertType     = 'VEHICLE_STOPPED' | 'FUEL_THEFT';
+export type AlertSeverity = 'CRITICAL' | 'WARNING';
+export type AlertStatus   = 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED' | 'ABORTED';
+
+export interface FleetAlert {
+  id:        string;
+  type:      AlertType;
+  severity:  AlertSeverity;
+  orderId:   string;
+  truckReg:  string;
+  title:     string;
+  /** Human summary for the card. */
+  detail:    string;
+  /** Why the detector fired, straight from the pipeline — not a canned string. */
+  reasoning: string[];
+  /** Where it happened, so the alert can be pinned on the map. */
+  lat?:      number;
+  lng?:      number;
+  // Fuel-theft specifics
+  dropLiters?:   number;
+  dropPercent?:  number;
+  compartments?: number[];
   detectedAt: Date;
-  severity: 'HIGH' | 'MEDIUM' | 'LOW';
-  status: 'OPEN' | 'REVIEWING' | 'RESOLVED';
+  status:     AlertStatus;
+  resolvedAt?: Date;
 }
 
-const ANOMALY_KEY = 'fuel_anomalies';
+const ALERTS_KEY = 'fuel_alerts';
 
-export const getFuelAnomalies = (): FuelAnomaly[] => {
+export const getAlerts = (): FleetAlert[] => {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(ANOMALY_KEY);
+    const raw = localStorage.getItem(ALERTS_KEY);
     if (!raw) return [];
-    return JSON.parse(raw).map((a: any) => ({ ...a, detectedAt: new Date(a.detectedAt) }));
+    return JSON.parse(raw).map((a: any) => ({
+      ...a,
+      detectedAt: new Date(a.detectedAt),
+      resolvedAt: a.resolvedAt ? new Date(a.resolvedAt) : undefined,
+    }));
   } catch { return []; }
 };
 
-export const addFuelAnomaly = (anomaly: FuelAnomaly) => {
+export const addAlert = (alert: FleetAlert) => {
   if (typeof window === 'undefined') return;
-  const existing = getFuelAnomalies();
-  existing.push(anomaly);
-  localStorage.setItem(ANOMALY_KEY, JSON.stringify(existing));
+  const existing = getAlerts();
+  existing.push(alert);
+  localStorage.setItem(ALERTS_KEY, JSON.stringify(existing));
 };
 
-export const updateFuelAnomaly = (id: string, updates: Partial<FuelAnomaly>) => {
+export const updateAlert = (id: string, updates: Partial<FleetAlert>) => {
   if (typeof window === 'undefined') return;
-  const items = getFuelAnomalies().map(a => a.id === id ? { ...a, ...updates } : a);
-  localStorage.setItem(ANOMALY_KEY, JSON.stringify(items));
+  const items = getAlerts().map(a => a.id === id ? { ...a, ...updates } : a);
+  localStorage.setItem(ALERTS_KEY, JSON.stringify(items));
 };
+
+/** Alerts still needing attention (an acknowledged stop is still open until it clears). */
+export const isAlertOpen = (a: FleetAlert) => a.status === 'OPEN' || a.status === 'ACKNOWLEDGED';
 
 // FIXED DEPOT LOCATION
 export const FIXED_DEPOT = {
@@ -531,14 +561,16 @@ const initializeStorage = () => {
   localStorage.setItem(STORAGE_KEYS.DRIVERS,           JSON.stringify(DEMO_DRIVERS));
   localStorage.setItem(STORAGE_KEYS.SELLER_CONNECTIONS,JSON.stringify(DEMO_CONNECTIONS));
   localStorage.setItem(STORAGE_KEYS.SELLER_CODES,      JSON.stringify(DEMO_CODES));
-  localStorage.removeItem(ANOMALY_KEY);
+  localStorage.removeItem(ALERTS_KEY);
+  clearTelemetry();
 };
 
 export const resetDemoData = () => {
   if (typeof window === 'undefined') return;
   Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
   localStorage.removeItem(VERSION_KEY);
-  localStorage.removeItem(ANOMALY_KEY);
+  localStorage.removeItem(ALERTS_KEY);
+  clearTelemetry();
   initializeStorage();
   localStorage.setItem(VERSION_KEY, DEMO_VERSION);
 };
@@ -547,7 +579,8 @@ if (typeof window !== 'undefined') {
   // Auto-reset if demo version changed
   if (localStorage.getItem(VERSION_KEY) !== DEMO_VERSION) {
     Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
-    localStorage.removeItem(ANOMALY_KEY);
+    localStorage.removeItem(ALERTS_KEY);
+    clearTelemetry();
     initializeStorage();
     localStorage.setItem(VERSION_KEY, DEMO_VERSION);
   }
@@ -863,10 +896,10 @@ const ORDER_STATUS_SEQUENCE = [
 
 /**
  * Chronological event feed for a single order — derived from the timestamps stored
- * on the order as it moves through the workflow, merged with any fuel anomalies
- * detected during its journey. Used by the seller & transporter order views.
+ * on the order as it moves through the workflow, merged with any alerts raised
+ * during its journey. Used by the seller & transporter order views.
  */
-export function getOrderTimeline(order: any, anomalies?: FuelAnomaly[]): OrderEvent[] {
+export function getOrderTimeline(order: any, alerts?: FleetAlert[]): OrderEvent[] {
   if (!order) return [];
   const toDate = (v: any) => (v ? new Date(v) : undefined);
   const reached = ORDER_STATUS_SEQUENCE.indexOf(order.status);
@@ -904,16 +937,16 @@ export function getOrderTimeline(order: any, anomalies?: FuelAnomaly[]): OrderEv
     });
   }
 
-  // Merge fuel anomalies detected for this order.
-  (anomalies ?? getFuelAnomalies())
+  // Merge alerts raised for this order.
+  (alerts ?? getAlerts())
     .filter(a => a.orderId === order.id)
     .forEach(a => events.push({
-      key:   `anomaly-${a.id}`,
-      icon:  '🚨',
-      label: `Fuel anomaly — ${a.fuelDropLiters}L drop`,
-      detail: [a.compartment, a.location, a.severity].filter(Boolean).join(' · '),
-      at:    toDate(a.detectedAt),
-      tone:  'alert',
+      key:    `alert-${a.id}`,
+      icon:   a.type === 'FUEL_THEFT' ? '🚨' : '⏸️',
+      label:  a.title,
+      detail: [a.detail, a.severity].filter(Boolean).join(' · '),
+      at:     toDate(a.detectedAt),
+      tone:   'alert',
     }));
 
   // Sort by timestamp when available; events without a time keep their insertion order.
@@ -970,10 +1003,206 @@ export function advanceLoading(): boolean {
   return changed;
 }
 
+/**
+ * Where the truck actually is at journey progress `t` — read off the same OSRM road
+ * geometry the map draws it on. This has to match: a stop computed on a straight
+ * depot→destination line lands nowhere near the drawn route (the road to Nakhal runs
+ * west along the coast before turning south), so the halted truck would appear
+ * stranded off-road in open desert.
+ *
+ * Falls back to the straight line only if the route hasn't resolved yet — in practice
+ * it always has, since the stop fires ~20s into a 60s journey.
+ */
+function positionAtProgress(order: any, t: number): { lat: number; lng: number } {
+  const dest  = destinationCoords(order);
+  const road  = getCachedRoadRoute(FIXED_DEPOT, dest);
+  if (road) {
+    const [lat, lng] = routePosition(road, t);
+    return { lat, lng };
+  }
+  return {
+    lat: FIXED_DEPOT.lat + (dest.lat - FIXED_DEPOT.lat) * t,
+    lng: FIXED_DEPOT.lng + (dest.lng - FIXED_DEPOT.lng) * t,
+  };
+}
+
+/**
+ * The Station B theft scenario, run once per poll for each en-route order headed
+ * there. Staged deliberately so each step is separately visible:
+ *
+ *   1. at THEFT_STOP_AT_PROGRESS the truck pulls off the road and stops
+ *   2. after STOP_ALERT_MS stationary → WARNING "vehicle stopped" alert
+ *   3. after SIPHON_START_MS the siphoning begins and C1/C2 start draining
+ *   4. the real detector runs on the recorded stream each tick; once the drop
+ *      clears the noise threshold while stationary and outside every geofence
+ *      → CRITICAL "fuel theft" alert
+ *
+ * Every tick records genuine telemetry, so step 4's reasoning is *computed* from
+ * that stream rather than asserted. (plan-b's equivalent scenario bypassed its own
+ * detector because it evaluated after the drain had already plateaued and a
+ * transition-detector saw nothing to flag; evaluating during the drain avoids that.)
+ */
+function runTheftScenario(o: any, trucks: Truck[]): boolean {
+  const truck    = trucks.find(t => t.id === o.assignedTruckId);
+  const deviceId = truck?.galileoskyDeviceId ?? `IMEI-${o.assignedTruckId}`;
+  const now      = Date.now();
+
+  // 1 — pull over, once, at the trigger point.
+  if (!o.stoppedAt) {
+    if (journeyProgress(o) < THEFT_STOP_AT_PROGRESS) return false;
+    const at = positionAtProgress(o, THEFT_STOP_AT_PROGRESS);
+    // Sits ON the drawn route: a truck that pulled over is still on the roadside, and
+    // an offset large enough to see at this zoom would read as "somewhere else
+    // entirely" rather than "stopped here".
+    updateOrder(o.id, { stoppedAt: new Date(), stoppedLat: at.lat, stoppedLng: at.lng });
+    return true;
+  }
+
+  const elapsed  = now - new Date(o.stoppedAt).getTime();
+  const readings = orderFuelTelemetry(o, now).readings;
+
+  // Record this tick as real telemetry: stationary, ignition off, current volumes.
+  ingestTelemetry({
+    truckId: o.assignedTruckId, deviceId,
+    lat: o.stoppedLat, lng: o.stoppedLng,
+    speed: 0, ignition: false, ts: now,
+    compartmentVolumes: readings.map(r => r.volume),
+  });
+
+  const alerts   = getAlerts().filter(a => a.orderId === o.id);
+  const hasStop  = alerts.some(a => a.type === 'VEHICLE_STOPPED');
+  const hasTheft = alerts.some(a => a.type === 'FUEL_THEFT');
+  let changed = false;
+
+  // 2 — stationary too long. A stop alone is only suspicious, never conclusive:
+  // drivers stop for traffic, rest and fuel. WARNING, not CRITICAL.
+  if (!hasStop && elapsed >= STOP_ALERT_MS) {
+    addAlert({
+      id:        `alert-stop-${o.id}`,
+      type:      'VEHICLE_STOPPED',
+      severity:  'WARNING',
+      orderId:   o.id,
+      truckReg:  o.assignedTruckRegistration ?? 'TRK',
+      title:     'Vehicle stopped en route',
+      detail:    `Stationary ${Math.round(elapsed / 1000)}s off-route, ignition off`,
+      reasoning: [
+        `stationary for ${Math.round(elapsed / 1000)}s with ignition off`,
+        'not inside the depot or the destination geofence',
+        'no fuel loss detected yet — monitoring',
+      ],
+      lat: o.stoppedLat, lng: o.stoppedLng,
+      detectedAt: new Date(),
+      status:     'OPEN',
+    });
+    if (o.assignedTSPId) {
+      addNotification({
+        id: `notif-stop-${o.id}`, userId: o.assignedTSPId,
+        type: 'VEHICLE_STOPPED', title: '⏸️ Vehicle stopped en route',
+        message: `${o.assignedTruckRegistration ?? 'Truck'} has been stationary for ${Math.round(elapsed / 1000)}s off-route on delivery #${shortOrderId(o.id)}.`,
+        read: false, createdAt: new Date(),
+      } as any);
+    }
+    changed = true;
+  }
+
+  // 4 — let the detector decide. Not a hardcoded "theft happened at T+7s": it only
+  // fires when the recorded stream genuinely satisfies drop + stationary + off-fence.
+  if (hasStop && !hasTheft) {
+    const dest = destinationCoords(o);
+    const evaluation = evaluateTheftRisk(getHistory(o.assignedTruckId).slice(-DETECTION_WINDOW), {
+      depot:       { center: FIXED_DEPOT, radiusM: FIXED_DEPOT.geofenceRadius },
+      destination: { center: dest, radiusM: destinationGeofenceRadiusM(o) },
+    });
+
+    if (evaluation.suspicious) {
+      const siphoned = readings.filter(r => SIPHONED_COMPARTMENTS.includes(r.index) && r.fuelType);
+      addAlert({
+        id:        `alert-theft-${o.id}`,
+        type:      'FUEL_THEFT',
+        severity:  'CRITICAL',
+        orderId:   o.id,
+        truckReg:  o.assignedTruckRegistration ?? 'TRK',
+        title:     'Fuel theft detected',
+        detail:    `${Math.round(evaluation.dropLiters).toLocaleString()}L (${Math.round(evaluation.dropPercent)}%) drained while stopped`,
+        reasoning: evaluation.reasoning,
+        lat: o.stoppedLat, lng: o.stoppedLng,
+        dropLiters:   Math.round(evaluation.dropLiters),
+        dropPercent:  Math.round(evaluation.dropPercent),
+        compartments: siphoned.map(r => r.index),
+        detectedAt:   new Date(),
+        status:       'OPEN',
+      });
+      if (o.assignedTSPId) {
+        addNotification({
+          id: `notif-theft-${o.id}`, userId: o.assignedTSPId,
+          type: 'FUEL_ANOMALY', title: '🚨 Fuel theft detected',
+          message: `${o.assignedTruckRegistration ?? 'Truck'} — ${Math.round(evaluation.dropLiters).toLocaleString()}L drained from C${siphoned.map(r => r.index).join(', C')} while stopped outside any authorized geofence.`,
+          read: false, createdAt: new Date(),
+        } as any);
+      }
+      changed = true;
+    }
+  } else if (hasTheft) {
+    // Keep the open alert current while fuel is still leaving the tank. The detector
+    // fires mid-drain, so its snapshot figure understates the loss within seconds —
+    // an operator reading the card a minute later needs today's number, not the one
+    // from the instant of detection.
+    const theft   = alerts.find(a => a.type === 'FUEL_THEFT');
+    const plan    = orderCompartmentPlan(o);
+    const loaded  = plan.reduce((s, c) => s + (c.fuelType ? c.capacity : 0), 0);
+    const current = readings.reduce((s, r) => s + r.volume, 0);
+    const drop    = Math.max(0, loaded - current);
+    const pct     = loaded > 0 ? Math.round((drop / loaded) * 100) : 0;
+    if (theft && theft.status !== 'ABORTED' && drop > (theft.dropLiters ?? 0)) {
+      updateAlert(theft.id, {
+        dropLiters:  Math.round(drop),
+        dropPercent: pct,
+        detail:      `${Math.round(drop).toLocaleString()}L (${pct}%) drained while stopped`,
+      });
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+/** Abort a delivery an operator has judged compromised — the CRITICAL alert's action. */
+export function abortDelivery(orderId: string, reason: string) {
+  const order = getOrders().find(o => o.id === orderId);
+  if (!order) return;
+  updateOrder(orderId, { status: 'DELIVERY_FAILED', failedAt: new Date(), failureReason: reason });
+  if (order.assignedTruckId) updateTruck(order.assignedTruckId, { status: 'RETURNING' });
+  // Close every alert on this trip — the operator has acted on the whole situation,
+  // so leaving the stop warning "open" underneath would be noise.
+  getAlerts()
+    .filter(a => a.orderId === orderId && isAlertOpen(a))
+    .forEach(a => updateAlert(a.id, { status: 'ABORTED', resolvedAt: new Date() }));
+  if (order.clientId) {
+    addNotification({
+      id: `notif-abort-${orderId}`, userId: order.clientId,
+      type: 'DELIVERY_FAILED', title: '⛔ Delivery aborted',
+      message: `Delivery #${shortOrderId(orderId)} was aborted en route. ${reason}`,
+      read: false, createdAt: new Date(),
+    } as any);
+  }
+}
+
+/** Geofence radius of an order's destination station, in metres. */
+export function destinationGeofenceRadiusM(order: any): number {
+  return DELIVERY_ZONES.find(z => z.id === order?.destination)?.radius ?? 250;
+}
+
 /** Flip any EN_ROUTE order whose journey has elapsed to ARRIVED (truck reached the station). */
 export function advanceJourneys(): boolean {
   let changed = false;
+  const trucks = getTrucks();
   getOrders().forEach((o: any) => {
+    // Station B deliveries get intercepted: the truck stops and is siphoned, so it
+    // never reaches the arrival check below.
+    if (o.status === 'EN_ROUTE' && o.destination === THEFT_STATION_ID && o.assignedTruckId) {
+      if (runTheftScenario(o, trucks)) changed = true;
+      return;
+    }
     if (o.status === 'EN_ROUTE' && journeyProgress(o) >= 1) {
       updateOrder(o.id, { status: 'ARRIVED', arrivedAt: new Date() });
       if (o.assignedTruckId) updateTruck(o.assignedTruckId, { status: 'ARRIVED' });
@@ -1006,6 +1235,25 @@ export function advanceJourneys(): boolean {
 export const TELEMETRY_INTERVAL_MS = 2_000;   // simulated flespi push cadence
 export const LOADING_DURATION_MS   = 8_000;   // depot fill time (compartments filling)
 export const OFFLOAD_DURATION_MS   = 10_000;  // station drain time (offloading)
+
+// ── Theft scenario (Station B) ───────────────────────────────
+// Deliveries to Station B are the "things go wrong" path: the truck pulls off the
+// road mid-route, sits there, and is siphoned. Station A stays the clean happy path,
+// so the demo can show either outcome just by choosing a destination.
+export const THEFT_STATION_ID = 'nakhal-station';
+
+/** How far along the route the truck pulls over (0→1 of the journey). */
+const THEFT_STOP_AT_PROGRESS = 0.35;
+/** Stationary for this long → the first (WARNING) alert. */
+export const STOP_ALERT_MS = 5_000;
+/** Siphoning starts a beat after the stop alert, so the two events read separately. */
+const SIPHON_START_MS = 7_000;
+/** How long the siphoned compartments take to drain to SIPHON_FLOOR. */
+const SIPHON_MS = 14_000;
+/** Fraction left in a siphoned compartment once drained. */
+const SIPHON_FLOOR = 0.15;
+/** Which compartments get siphoned — a thief empties what's reachable, not everything. */
+const SIPHONED_COMPARTMENTS = [1, 2];
 
 export type FuelPhase = 'EMPTY' | 'LOADING' | 'LOADED' | 'IN_TRANSIT' | 'OFFLOADING' | 'DELIVERED';
 
@@ -1043,6 +1291,15 @@ export function orderCompartmentPlan(order: any): { index: number; fuelType: str
 export function orderFuelPhase(order: any, now = Date.now()): { phase: FuelPhase; fill: number } {
   if (!order) return { phase: 'EMPTY', fill: 0 };
 
+  // Siphoned at an unauthorized stop. Reported as OFFLOADING because that is
+  // literally what the sensors see — fuel leaving the tank — and the amber pulsing
+  // treatment reads correctly. Only the siphoned compartments actually move; see
+  // siphonFactor() in orderFuelTelemetry. The level stays frozen after the trip is
+  // aborted rather than snapping back to full or to empty.
+  if (order.stoppedAt) {
+    return { phase: 'OFFLOADING', fill: 1 };
+  }
+
   if (order.status === 'COMPLETED') {
     const start = order.completedAt ? new Date(order.completedAt).getTime() : 0;
     const t = start ? (now - start) / OFFLOAD_DURATION_MS : 1;
@@ -1062,6 +1319,21 @@ export function orderFuelPhase(order: any, now = Date.now()): { phase: FuelPhase
   return { phase: 'EMPTY', fill: 0 };
 }
 
+/**
+ * Per-compartment fill multiplier while a truck is being siphoned at an unauthorized
+ * stop. Returns 1 (untouched) for compartments the thief didn't reach — that
+ * asymmetry is the point: two tanks draining while two sit full is far more legible
+ * on the gauge, and more true to life, than the whole load sinking uniformly.
+ */
+function siphonFactor(order: any, compartmentIndex: number, now: number): number {
+  if (!order?.stoppedAt) return 1;
+  if (!SIPHONED_COMPARTMENTS.includes(compartmentIndex)) return 1;
+  const elapsed = now - new Date(order.stoppedAt).getTime();
+  if (elapsed <= SIPHON_START_MS) return 1;   // stopped, but the siphoning hasn't started yet
+  const t = Math.max(0, Math.min(1, (elapsed - SIPHON_START_MS) / SIPHON_MS));
+  return 1 - t * (1 - SIPHON_FLOOR);
+}
+
 /** Full derived telemetry snapshot for an order's truck at time `now`. */
 export function orderFuelTelemetry(order: any, now = Date.now()): {
   phase: FuelPhase;
@@ -1072,7 +1344,7 @@ export function orderFuelTelemetry(order: any, now = Date.now()): {
   const { phase, fill } = orderFuelPhase(order, now);
   const readings: CompartmentReading[] = orderCompartmentPlan(order).map(c => ({
     ...c,
-    volume: c.fuelType ? Math.round(c.capacity * fill) : 0,
+    volume: c.fuelType ? Math.round(c.capacity * fill * siphonFactor(order, c.index, now)) : 0,
   }));
   return {
     phase,

@@ -3,9 +3,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import {
-  getOrders, getTrucks, getFuelAnomalies, updateFuelAnomaly,
+  getOrders, getTrucks, getAlerts, updateAlert, isAlertOpen, abortDelivery,
   advanceJourneys, advanceLoading, OFFLOAD_DURATION_MS, shortOrderId,
   FIXED_DEPOT, JOURNEY_DURATION_MS, destinationCoords,
+  type FleetAlert,
 } from '@/src/lib/demo-data';
 import TruckFocusPanel from '@/src/components/fleet/TruckFocusPanel';
 import type { Journey } from '@/src/components/maps/LiveTrackingMap';
@@ -26,20 +27,20 @@ const STATUS_PILL: Record<string, { label: string; cls: string }> = {
   EN_ROUTE:  { label: 'En route',       cls: 'bg-blue-100    text-blue-700'    },
   ARRIVED:   { label: 'Arrived',        cls: 'bg-teal-100    text-teal-700'    },
   COMPLETED: { label: 'Delivered',      cls: 'bg-emerald-100 text-emerald-700' },
+  DELIVERY_FAILED:     { label: 'Aborted', cls: 'bg-red-100  text-red-700'  },
   PENDING_INTEGRATION: { label: 'Pending', cls: 'bg-gray-100 text-gray-500' },
 };
-const SEVERITY_STYLE: Record<string, string> = {
-  HIGH:   'bg-red-100    text-red-700    border-red-300',
-  MEDIUM: 'bg-yellow-100 text-yellow-700 border-yellow-300',
-  LOW:    'bg-green-100  text-green-700  border-green-300',
-};
-const ANOMALY_STATUS_STYLE: Record<string, string> = {
-  OPEN:      'bg-red-500     text-white',
-  REVIEWING: 'bg-yellow-500  text-white',
-  RESOLVED:  'bg-emerald-500 text-white',
+// Severity drives the whole visual weight of an alert card. A stop is amber and
+// acknowledgeable; fuel actually leaving the tank is red and abortable.
+const ALERT_STYLE: Record<string, { icon: string; bg: string; text: string; badge: string }> = {
+  CRITICAL: { icon: '🚨', bg: 'bg-red-50',   text: 'text-red-800',   badge: 'bg-red-600 text-white'   },
+  WARNING:  { icon: '⏸️', bg: 'bg-amber-50', text: 'text-amber-800', badge: 'bg-amber-500 text-white' },
 };
 
-const ACTIVE_STATUSES = ['ASSIGNED', 'LOADING', 'LOADED', 'EN_ROUTE', 'ARRIVED'];
+// DELIVERY_FAILED stays in the list: an aborted trip is exactly the one an operator
+// still wants to look at, and dropping it the instant it fails would make the truck
+// vanish from the map mid-incident.
+const ACTIVE_STATUSES = ['ASSIGNED', 'LOADING', 'LOADED', 'EN_ROUTE', 'ARRIVED', 'DELIVERY_FAILED'];
 
 // Overview map legend — mirrors TRUCK_BG in LiveTrackingMap.
 const LEGEND = [
@@ -55,6 +56,9 @@ const ON_ROAD_STATUSES = ['EN_ROUTE', 'ARRIVED'];
 // Ring radius used to fan parked trucks out around the depot (~1 km) so each one
 // stays individually hoverable instead of collapsing into a single pin.
 const DEPOT_FAN_RADIUS = 0.010;
+
+/** Alerts render in full up to this many; beyond it the panel caps and scrolls. */
+const ALERT_SCROLL_AFTER = 5;
 
 type Filter = 'order' | 'truck';
 type Selection = { type: Filter; id: string } | null;
@@ -76,7 +80,7 @@ function tooltipHtml(item: Item): string {
   if (o?.destinationName)  lines.push(`<div style="color:#64748b">→ ${esc(o.destinationName)}</div>`);
   if (o?.assignedDriverName) lines.push(`<div style="color:#64748b">👤 ${esc(o.assignedDriverName)}</div>`);
   if (o?.volume)           lines.push(`<div style="color:#64748b">🛢️ ${esc(o.volume.toLocaleString())}L ${esc(o.fuelType)}</div>`);
-  if (item.alert)          lines.push(`<div style="color:#dc2626;font-weight:700">🚨 Fuel anomaly open</div>`);
+  if (item.alert)          lines.push(`<div style="color:#dc2626;font-weight:700">🚨 Alert open</div>`);
 
   return `<div style="font-family:inherit;font-size:12px;line-height:1.5;min-width:150px">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
@@ -93,7 +97,7 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
 
   const [orders,    setOrders]    = useState<any[]>([]);
   const [trucks,    setTrucks]    = useState<any[]>([]);
-  const [anomalies, setAnomalies] = useState<any[]>([]);
+  const [alerts,    setAlerts]    = useState<FleetAlert[]>([]);
   const [filter,    setFilter]    = useState<Filter>('order');
   const [selection, setSelection] = useState<Selection>(null);
   // Free-text filter over the side list (not a dropdown — the list IS the picker).
@@ -104,7 +108,7 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
     advanceJourneys();
     setOrders(getOrders().filter((o: any) => isSeller ? o.workspaceId === user.workspaceId : o.assignedTSPId === user.id));
     setTrucks(getTrucks().filter((t: any) => isSeller ? true : t.tspId === user.id));
-    setAnomalies(getFuelAnomalies());
+    setAlerts(getAlerts());
   }, [user, isSeller]);
 
   useEffect(() => {
@@ -142,8 +146,12 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
   const hasFocus = !!(focusedOrder || focusedTruck);
 
   const myRegs = new Set(trucks.map(t => t.registrationNumber));
-  const visibleAnomalies = isSeller ? anomalies : anomalies.filter(a => myRegs.has(a.truckReg));
-  const openAnomalies = visibleAnomalies.filter(a => a.status !== 'RESOLVED');
+  const visibleAlerts = (isSeller ? alerts : alerts.filter(a => myRegs.has(a.truckReg)))
+    // Newest first, and CRITICAL above WARNING at the same moment.
+    .sort((a, b) =>
+      Number(isAlertOpen(b)) - Number(isAlertOpen(a)) ||
+      new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime());
+  const openAlerts = visibleAlerts.filter(isAlertOpen);
 
   // ── Searchable items for the current filter ──────────────────
   const allItems: Item[] = filter === 'truck'
@@ -153,7 +161,7 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
         const sub    = order ? `→ ${order.destinationName}` : `${t.compartments?.length ?? 0}C · ${t.capacity?.toLocaleString()}L`;
         return {
           key: t.id, sel: { type: 'truck' as Filter, id: t.id }, title: t.registrationNumber, sub, status,
-          alert: openAnomalies.some(a => a.truckReg === t.registrationNumber),
+          alert: openAlerts.some(a => a.truckReg === t.registrationNumber),
           search: `${t.registrationNumber} ${order?.destinationName ?? ''}`.toLowerCase(),
           order, truck: t,
         };
@@ -161,7 +169,7 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
     : trackableOrders.map(o => ({
         key: o.id, sel: { type: 'order' as Filter, id: o.id },
         title: `#${shortOrderId(o.id)}`, sub: `${o.assignedTruckRegistration ?? '—'} · → ${o.destinationName}`, status: o.status,
-        alert: openAnomalies.some(a => a.truckReg === o.assignedTruckRegistration),
+        alert: openAlerts.some(a => a.truckReg === o.assignedTruckRegistration),
         search: `${shortOrderId(o.id)} ${o.id} ${o.assignedTruckRegistration ?? ''} ${o.destinationName ?? ''}`.toLowerCase(),
         order: o, truck: trucks.find(t => t.id === o.assignedTruckId) ?? null,
       }));
@@ -193,9 +201,14 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
         : undefined,
       startedAt:  o?.tripStartedAt ? new Date(o.tripStartedAt).getTime() : 0,
       durationMs: JOURNEY_DURATION_MS,
-      at: item.truck?.currentLat != null && item.truck?.currentLng != null
-        ? { lat: item.truck.currentLat, lng: item.truck.currentLng }
-        : undefined,
+      // A halted truck pins to where it stopped; otherwise `at` is just the parking
+      // spot used before departure.
+      halted: !!o?.stoppedAt,
+      at: o?.stoppedAt && o.stoppedLat != null
+        ? { lat: o.stoppedLat, lng: o.stoppedLng }
+        : item.truck?.currentLat != null && item.truck?.currentLng != null
+          ? { lat: item.truck.currentLat, lng: item.truck.currentLng }
+          : undefined,
       offset: angle == null
         ? undefined
         : [Math.sin(angle) * DEPOT_FAN_RADIUS, Math.cos(angle) * DEPOT_FAN_RADIUS],
@@ -287,7 +300,7 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
 
           {/* The list itself — always visible, so the fleet can be scanned at a glance
               and a different truck is one click away even while focused on another. */}
-          <div className="max-h-[520px] overflow-y-auto divide-y divide-gray-50">
+          <div className="max-h-[320px] overflow-y-auto divide-y divide-gray-50">
             {visibleItems.length === 0 ? (
               <p className="px-4 py-8 text-sm text-gray-400 text-center">
                 {allItems.length === 0
@@ -317,6 +330,105 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
                 </button>
               );
             })}
+          </div>
+
+          {/* ── ALERTS ── Sits directly under the deliveries it refers to, so the
+              incident and the trip it belongs to are read in one glance. Scrolls
+              independently — a burst of alerts must never push the fleet list away. */}
+          <div className="border-t-2 border-gray-100">
+            <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b border-gray-100">
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Alerts</p>
+              {openAlerts.length > 0 && (
+                <span className="text-[10px] font-black text-red-700 bg-red-100 px-2 py-0.5 rounded-full">
+                  {openAlerts.length} OPEN
+                </span>
+              )}
+            </div>
+
+            {/* Grows freely up to ALERT_SCROLL_AFTER cards — a scrollbar over two or
+                three alerts just hides them behind a gesture. Past that it caps at
+                most of the viewport height and scrolls. */}
+            <div className={`divide-y divide-gray-50 ${
+              visibleAlerts.length > ALERT_SCROLL_AFTER ? 'max-h-[60vh] overflow-y-auto' : ''
+            }`}>
+              {visibleAlerts.length === 0 ? (
+                <p className="px-4 py-6 text-xs text-gray-400 text-center">No alerts — all trips nominal</p>
+              ) : visibleAlerts.map(a => {
+                const s      = ALERT_STYLE[a.severity];
+                const closed = !isAlertOpen(a);
+                return (
+                  // The whole card selects the truck — same gesture as the delivery
+                  // rows above, so "Track" doesn't need to exist as a button. Only the
+                  // decision (acknowledge / abort) earns one.
+                  <div
+                    key={a.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelection({ type: 'order', id: a.orderId })}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') setSelection({ type: 'order', id: a.orderId }); }}
+                    className={`px-4 py-3 cursor-pointer transition ${closed ? 'opacity-50 hover:opacity-70' : `${s.bg} hover:brightness-95`}`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="text-sm leading-none mt-0.5 flex-shrink-0">{s.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${s.badge}`}>
+                            {closed ? a.status : a.severity}
+                          </span>
+                          <p className="text-xs font-bold text-gray-900 truncate">{a.truckReg}</p>
+                          <span className="text-[10px] text-gray-400 ml-auto flex-shrink-0">
+                            {new Date(a.detectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <p className={`text-xs font-semibold mt-0.5 ${s.text}`}>{a.title}</p>
+                        <p className="text-[11px] text-gray-500 mt-0.5">{a.detail}</p>
+
+                        {/* The detector's own reasoning — why this fired, not a canned line. */}
+                        {isAlertOpen(a) && (
+                          <ul className="mt-1.5 space-y-0.5">
+                            {a.reasoning.map((r, i) => (
+                              <li key={i} className="text-[10px] text-gray-400 flex gap-1">
+                                <span className="flex-shrink-0">·</span>
+                                <span>{r}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+
+                        {/* CRITICAL gets the destructive action; a WARNING only gets
+                            acknowledged — a stop on its own isn't grounds to abort.
+                            stopPropagation so acting doesn't also re-select the card. */}
+                        {isAlertOpen(a) && (
+                          <div className="flex flex-wrap items-center gap-1.5 mt-2" onClick={e => e.stopPropagation()}>
+                            {a.type === 'FUEL_THEFT' ? (
+                              <button
+                                onClick={() => {
+                                  if (!confirm(`Abort delivery #${shortOrderId(a.orderId)}?\n\nThe truck will be recalled to the depot and the client notified. This cannot be undone.`)) return;
+                                  abortDelivery(a.orderId, a.detail);
+                                  load();
+                                }}
+                                className="text-[11px] font-bold text-white bg-red-600 hover:bg-red-700 px-2.5 py-1 rounded-lg transition"
+                              >
+                                Abort delivery
+                              </button>
+                            ) : a.status === 'OPEN' ? (
+                              <button
+                                onClick={() => { updateAlert(a.id, { status: 'ACKNOWLEDGED' }); load(); }}
+                                className="text-[11px] font-bold text-amber-700 bg-white border border-amber-300 hover:bg-amber-50 px-2.5 py-1 rounded-lg transition"
+                              >
+                                Acknowledge
+                              </button>
+                            ) : (
+                              <span className="text-[11px] font-semibold text-amber-700">✓ Acknowledged — monitoring</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </aside>
 
@@ -374,57 +486,6 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
             )}
           </section>
 
-          {/* Theft alerts */}
-          {openAnomalies.length > 0 && (
-            <section className="bg-white border-2 border-red-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="flex items-center gap-3 px-6 py-4 bg-red-50 border-b border-red-200">
-                <div className="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center text-lg flex-shrink-0">🚨</div>
-                <div className="flex-1">
-                  <h2 className="font-bold text-red-800">Fuel Anomaly Alerts</h2>
-                  <p className="text-xs text-red-600 mt-0.5">Unexpected fuel drops detected outside delivery windows</p>
-                </div>
-                <span className="text-xs font-black text-red-700 bg-red-200 px-2.5 py-1 rounded-full">{openAnomalies.length} OPEN</span>
-              </div>
-              <div className="divide-y divide-gray-50">
-                {visibleAnomalies.map(a => (
-                  <div key={a.id} className="flex items-center gap-4 px-6 py-4 hover:bg-slate-50 transition">
-                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                      a.severity === 'HIGH' ? 'bg-red-500 animate-pulse' : a.severity === 'MEDIUM' ? 'bg-yellow-500' : 'bg-green-500'
-                    }`} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                        <p className="font-bold text-gray-900 text-sm">{a.truckReg}</p>
-                        <span className="text-xs text-gray-500">{a.compartment}</span>
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${SEVERITY_STYLE[a.severity]}`}>{a.severity}</span>
-                      </div>
-                      <p className="text-xs text-gray-500">{a.location}</p>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-sm font-black text-red-600">−{a.fuelDropLiters}L</p>
-                      <p className="text-xs text-gray-400">{new Date(a.detectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-                    </div>
-                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${ANOMALY_STATUS_STYLE[a.status]}`}>{a.status}</span>
-                    {isSeller && a.status === 'OPEN' && (
-                      <button
-                        onClick={() => { updateFuelAnomaly(a.id, { status: 'REVIEWING' }); load(); }}
-                        className="text-xs font-semibold text-blue-600 hover:text-blue-700 px-3 py-1 border border-blue-200 rounded-lg hover:bg-blue-50 transition flex-shrink-0"
-                      >
-                        Review
-                      </button>
-                    )}
-                    {isSeller && a.status === 'REVIEWING' && (
-                      <button
-                        onClick={() => { updateFuelAnomaly(a.id, { status: 'RESOLVED' }); load(); }}
-                        className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 px-3 py-1 border border-emerald-200 rounded-lg hover:bg-emerald-50 transition flex-shrink-0"
-                      >
-                        Resolve
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
         </>
       )}
         </div>

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders, getKYCDocuments, getFuelAnomalies, shortOrderId } from '@/src/lib/demo-data';
+import { getCurrentUser, getOrders, getKYCDocuments, getAlerts, isAlertOpen, shortOrderId } from '@/src/lib/demo-data';
 
 const STATUS_COLOR: Record<string, string> = {
   PLACED:             'bg-yellow-100 text-yellow-700',
@@ -22,13 +22,13 @@ export default function SellerDashboard() {
   const [user,      setUser]      = useState<any>(null);
   const [orders,    setOrders]    = useState<any[]>([]);
   const [kycDocs,   setKycDocs]   = useState<any[]>([]);
-  const [anomalies, setAnomalies] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<any[]>([]);
   const [mounted,   setMounted]   = useState(false);
 
   const load = useCallback((u: any) => {
     setOrders(getOrders().filter((o: any) => o.workspaceId === u.workspaceId));
     setKycDocs(getKYCDocuments());
-    setAnomalies(getFuelAnomalies());
+    setAlerts(getAlerts());
   }, []);
 
   useEffect(() => {
@@ -48,7 +48,7 @@ export default function SellerDashboard() {
   const active         = orders.filter(o => ['ASSIGNED_TO_TSP', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(o.status));
   const completed      = orders.filter(o => o.status === 'COMPLETED');
   const pendingKYC     = kycDocs.filter(k => k.reviewStatus === 'PENDING' && k.sellerCode === user.sellerCode);
-  const openAlerts     = anomalies.filter(a => a.status !== 'RESOLVED');
+  const openAlerts     = alerts.filter(isAlertOpen);
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -83,9 +83,9 @@ export default function SellerDashboard() {
             <div className="bg-red-50 border-2 border-red-300 rounded-2xl p-5 flex items-start gap-4">
               <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center text-xl flex-shrink-0">🚨</div>
               <div className="flex-1">
-                <p className="font-bold text-red-800 text-lg">{openAlerts.length} Fuel Anomaly Alert{openAlerts.length > 1 ? 's' : ''}</p>
+                <p className="font-bold text-red-800 text-lg">{openAlerts.length} Fleet Alert{openAlerts.length > 1 ? 's' : ''}</p>
                 <p className="text-red-600 text-sm mt-0.5">
-                  {openAlerts[0].truckReg} — {openAlerts[0].fuelDropLiters}L unexpected drop on {openAlerts[0].compartment}. {openAlerts[0].location}
+                  {openAlerts[0].truckReg} — {openAlerts[0].title}. {openAlerts[0].detail}
                 </p>
               </div>
               <button

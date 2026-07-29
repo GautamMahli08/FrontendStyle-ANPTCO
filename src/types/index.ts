@@ -24,6 +24,8 @@ export type OrderStatus =
   | 'ARRIVED'
   | 'DELIVERY_ACCEPTED'
   | 'DELIVERY_REJECTED'
+  // Aborted mid-trip by an operator acting on a fuel-theft alert.
+  | 'DELIVERY_FAILED'
   | 'OFFLOADING_IN_PROGRESS'
   | 'OFFLOADING_COMPLETE'
   | 'COMPLETED'
@@ -261,6 +263,13 @@ export interface Order {
   cancelledAt?:   Date;
   rejectedAt?:    Date;
   rejectionReason?: string;
+
+  // Unauthorized stop en route (theft scenario) — where and when the truck halted.
+  stoppedAt?:  Date;
+  stoppedLat?: number;
+  stoppedLng?: number;
+  failedAt?:   Date;
+  failureReason?: string;
   updatedAt?:     Date;
   acceptedAt?:    Date;
   scheduledDeliveryTime?: Date;

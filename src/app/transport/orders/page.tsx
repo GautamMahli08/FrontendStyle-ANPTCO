@@ -7,7 +7,7 @@ import Header  from '@/src/components/layout/Header';
 import {
   getCurrentUser, getOrders, getTrucks, getDrivers,
   updateOrder, updateTruck, addNotification,
-  addFuelAnomaly, orderFuelBreakdown, shortOrderId,
+  orderFuelBreakdown, shortOrderId,
   advanceJourneys, advanceLoading,
 } from '@/src/lib/demo-data';
 import { logDemoEvent } from '@/src/app/client/dashboard/page';
@@ -143,35 +143,18 @@ export default function TransportOrdersPage() {
       read: false, createdAt: new Date(),
     });
 
-    // ── Theft simulation for Client 2 ──
-    if (order.clientId === 'client-002') {
-      setTimeout(() => {
-        addFuelAnomaly({
-          id:             `anomaly-${Date.now()}`,
-          orderId:        order.id,
-          truckReg:       order.assignedTruckRegistration ?? 'TRK',
-          compartment:    'C1 (Petrol)',
-          fuelDropLiters: 320,
-          // Kept destination-neutral: this order may be headed to either station.
-          location:       'Off-route stop — 18 min',
-          detectedAt:     new Date(),
-          severity:       'HIGH',
-          status:         'OPEN',
-        });
-        addNotification({
-          id: `notif-theft-${Date.now()}`, userId: 'seller-001',
-          type: 'FUEL_ANOMALY', title: '🚨 Fuel Anomaly Detected',
-          message: `Unexpected fuel drop of 320L on truck ${order.assignedTruckRegistration} (C1 Petrol) during Order #${shortOrderId(order.id)}. Truck deviated from its route to ${order.destinationName ?? 'the station'}.`,
-          read: false, createdAt: new Date(),
-        });
-      }, 3000);
-    }
+    // Theft is no longer scripted from here. Deliveries to Station B are intercepted
+    // mid-route by advanceJourneys(), which stops the truck, records real telemetry
+    // as it's siphoned, and lets the detector in src/lib/theft-pipeline.ts decide
+    // whether to raise an alert — see THEFT_STATION_ID in src/lib/demo-data.ts.
 
-    // Hand off to the Fleet Monitor focused on this order so the TSP can watch
-    // the truck drive to the station live.
+    // Deliberately stays on this page. Dispatching one truck usually means the next
+    // order also needs attention, and jumping to the Fleet Monitor forced a trip back
+    // here for every single dispatch. The row flips to "En route" with its own Track
+    // button, so watching it live stays one click away when it's actually wanted.
     setTimeout(() => {
       setJourneyLoading(null);
-      router.push(`/transport/fleet-monitor?order=${order.id}`);
+      loadData(user);
     }, 500);
   };
 

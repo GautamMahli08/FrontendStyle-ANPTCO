@@ -4,6 +4,11 @@ import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { escapeHtml } from '@/src/lib/utils';
+// Road geometry is shared with the theft scenario in demo-data, which has to stop a
+// truck on the same road this map draws it on — see src/lib/route-geometry.ts.
+import {
+  ensureRoadRoute, getCachedRoadRoute, routeCacheKey, routePosition, straightPath,
+} from '@/src/lib/route-geometry';
 
 /**
  * LiveTrackingMap — real (OpenStreetMap / Leaflet) map showing trucks driving from
@@ -27,6 +32,11 @@ export type Journey = {
   // ── Fleet-overview extras (unused by the single-truck focus view) ──
   /** Where to park the truck before it departs. Defaults to the depot. */
   at?: { lat: number; lng: number };
+  /**
+   * Truck has halted mid-route (unauthorized stop) — pin it at `at` instead of
+   * letting elapsed time keep sliding it along the route toward the destination.
+   */
+  halted?: boolean;
   /** Small lat/lng nudge so several parked trucks don't stack on one pin. */
   offset?: [number, number];
   /** HTML shown on hover. When set, replaces the click popup. */
@@ -35,77 +45,6 @@ export type Journey = {
   alert?: boolean;
 };
 
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-
-/**
- * Straight depot → destination line. Used only as an instant fallback while the
- * real road geometry is being fetched (or if the routing service is unreachable).
- */
-function getRoutePath(
-  depot: Journey['depot'],
-  dest: NonNullable<Journey['dest']>,
-): [number, number][] {
-  return [
-    [depot.lat, depot.lng],
-    [dest.lat, dest.lng],
-  ];
-}
-
-/**
- * Fetch the actual road-following route between two points from the public OSRM
- * server (same OpenStreetMap road network the tiles are drawn from), so trucks
- * drive along real highways instead of cutting across the Gulf of Oman.
- * Returns the path as [lat, lng] pairs, or null if the request fails.
- */
-async function fetchRoadRoute(
-  depot: Journey['depot'],
-  dest: NonNullable<Journey['dest']>,
-): Promise<[number, number][] | null> {
-  try {
-    const url =
-      `https://router.project-osrm.org/route/v1/driving/` +
-      `${depot.lng},${depot.lat};${dest.lng},${dest.lat}` +
-      `?overview=full&geometries=geojson`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const coords = data?.routes?.[0]?.geometry?.coordinates;
-    if (!Array.isArray(coords) || coords.length < 2) return null;
-    // OSRM returns [lng, lat]; Leaflet wants [lat, lng].
-    return coords.map((c: [number, number]) => [c[1], c[0]] as [number, number]);
-  } catch {
-    return null;
-  }
-}
-
-function routeLength(path: [number, number][]) {
-  let total = 0;
-  for (let i = 0; i < path.length - 1; i += 1) {
-    total += L.latLng(path[i]).distanceTo(L.latLng(path[i + 1]));
-  }
-  return total;
-}
-
-function routePosition(path: [number, number][], t: number): [number, number] {
-  if (t <= 0) return path[0];
-  if (t >= 1) return path[path.length - 1];
-
-  const total = routeLength(path);
-  let remaining = total * t;
-
-  for (let i = 0; i < path.length - 1; i += 1) {
-    const start = L.latLng(path[i]);
-    const end = L.latLng(path[i + 1]);
-    const segDist = start.distanceTo(end);
-    if (remaining <= segDist || i === path.length - 2) {
-      const ratio = segDist === 0 ? 0 : remaining / segDist;
-      return [lerp(start.lat, end.lat, ratio), lerp(start.lng, end.lng, ratio)];
-    }
-    remaining -= segDist;
-  }
-
-  return path[path.length - 1];
-}
 
 function progress(j: Journey): number {
   if (j.status === 'ARRIVED') return 1;
@@ -120,6 +59,7 @@ function progress(j: Journey): number {
  */
 function truckPosition(j: Journey, route: [number, number][] | null): [number, number] {
   const [dLat, dLng] = j.offset ?? [0, 0];
+  if (j.halted && j.at) return [j.at.lat, j.at.lng];
   if (!j.dest || !route) {
     const parked = j.at ?? j.depot;
     return [parked.lat + dLat, parked.lng + dLng];
@@ -187,7 +127,9 @@ const TRUCK_BG: Record<string, string> = {
 };
 
 function truckIcon(j: Journey, clickable: boolean) {
-  const bg     = TRUCK_BG[j.status] ?? '#94a3b8';   // idle / pending → slate
+  // A halted truck reads red regardless of the order status underneath — it is
+  // still nominally "EN_ROUTE", but it is very much not en route.
+  const bg     = j.halted ? '#ef4444' : TRUCK_BG[j.status] ?? '#94a3b8';   // idle / pending → slate
   const border = j.alert ? '#ef4444' : 'white';
   return L.divIcon({
     className: '',
@@ -203,25 +145,9 @@ function truckIcon(j: Journey, clickable: boolean) {
 
 type Layer = { dest?: L.Marker; line?: L.Polyline; truck: L.Marker };
 
-/**
- * Road-route cache, deliberately at MODULE scope rather than in a ref: it has to
- * outlive the component. Leaving the Fleet Monitor unmounts the map, and on the way
- * back a per-instance cache would be empty — so every journey would redraw as a
- * straight depot→destination line for the length of an OSRM round-trip before
- * snapping onto the real road.
- *
- * Keyed on GEOMETRY (depot→dest), not journey id, so every truck heading to the same
- * station shares one entry: switching between the Orders and Trucks filters, or from
- * the overview into the focus view, reuses the cached path instead of refetching.
- */
-const ROUTE_CACHE   = new Map<string, [number, number][]>();  // resolved road geometry only
-const ROUTE_PENDING = new Set<string>();                      // in-flight, so we don't double-fetch
-
-const routeKey = (j: Journey) =>
-  `${j.depot.lat},${j.depot.lng}->${j.dest?.lat},${j.dest?.lng}`;
-
-/** Cached road route, or null when it hasn't resolved yet (caller falls back to a straight line). */
-const cachedRoute = (j: Journey) => (j.dest ? ROUTE_CACHE.get(routeKey(j)) ?? null : null);
+const routeKey    = (j: Journey) => routeCacheKey(j.depot, j.dest!);
+const cachedRoute = (j: Journey) => (j.dest ? getCachedRoadRoute(j.depot, j.dest) : null);
+const fallback    = (j: Journey) => straightPath(j.depot, j.dest!);
 
 export default function LiveTrackingMap({
   journeys,
@@ -259,7 +185,7 @@ export default function LiveTrackingMap({
 
     const pts: [number, number][] = [[js[0].depot.lat, js[0].depot.lng]];
     js.forEach(j => {
-      const route = j.dest ? (cachedRoute(j) ?? getRoutePath(j.depot, j.dest)) : null;
+      const route = j.dest ? (cachedRoute(j) ?? fallback(j)) : null;
       if (j.dest) pts.push([j.dest.lat, j.dest.lng]);
       if (route)  pts.push(...route);          // include the road geometry, which can bulge outside
       pts.push(truckPosition(j, route));
@@ -283,33 +209,26 @@ export default function LiveTrackingMap({
     fitAllRef.current();
   }, [journeys]);
 
-  // Fetch the real road geometry for any route we don't already hold, then snap the
-  // polyline (and the truck's path) onto it. Anything already in ROUTE_CACHE from an
-  // earlier visit is reused immediately, so returning to this page draws the road at once.
+  // Resolve the real road geometry for any route not already held, then snap the
+  // polyline (and the truck's path) onto it. Anything cached from an earlier visit is
+  // reused immediately, so returning to this page draws the road at once. Caching and
+  // in-flight de-duplication both live in route-geometry.
   useEffect(() => {
     journeys.forEach(j => {
-      if (!j.dest) return;
+      if (!j.dest || getCachedRoadRoute(j.depot, j.dest)) return;
       const key = routeKey(j);
-      // Resolved already, or another journey to the same station is fetching it.
-      if (ROUTE_CACHE.has(key) || ROUTE_PENDING.has(key)) return;
-
-      ROUTE_PENDING.add(key);
-      fetchRoadRoute(j.depot, j.dest)
-        .then(path => {
-          // On failure leave the key uncached rather than storing the straight-line
-          // fallback — otherwise one flaky request would pin a wrong route for the
-          // whole session, with nothing ever retrying it.
-          if (!path) return;
-          ROUTE_CACHE.set(key, path);
-          // Every journey sharing this destination, not just the one that fetched it.
-          dataRef.current.forEach(other => {
-            if (routeKey(other) === key) layersRef.current.get(other.id)?.line?.setLatLngs(path);
-          });
-          // The placeholder was a straight line; the real road can swing well outside it,
-          // so reframe — unless the user has already taken control of the view.
-          if (!userMovedRef.current) fitAllRef.current();
-        })
-        .finally(() => ROUTE_PENDING.delete(key));
+      ensureRoadRoute(j.depot, j.dest).then(path => {
+        if (!path) return;
+        // Every journey sharing this destination, not just the one that fetched it.
+        dataRef.current.forEach(other => {
+          if (other.dest && routeKey(other) === key) {
+            layersRef.current.get(other.id)?.line?.setLatLngs(path);
+          }
+        });
+        // The placeholder was a straight line; the real road can swing well outside it,
+        // so reframe — unless the user has already taken control of the view.
+        if (!userMovedRef.current) fitAllRef.current();
+      });
     });
   }, [journeys]);
 
@@ -370,7 +289,7 @@ export default function LiveTrackingMap({
       const seen = new Set<string>();
       js.forEach(j => {
         seen.add(j.id);
-        const route = j.dest ? (cachedRoute(j) ?? getRoutePath(j.depot, j.dest)) : null;
+        const route = j.dest ? (cachedRoute(j) ?? fallback(j)) : null;
         const [lat, lng] = truckPosition(j, route);
 
         const layer = layersRef.current.get(j.id);
