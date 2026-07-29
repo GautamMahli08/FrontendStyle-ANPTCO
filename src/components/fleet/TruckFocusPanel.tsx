@@ -40,8 +40,11 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
         id:         order.id,
         truckReg:   order.assignedTruckRegistration || reg,
         status:     order.status,
-        depot:      { lat: FIXED_DEPOT.lat, lng: FIXED_DEPOT.lng, name: FIXED_DEPOT.name },
-        dest:       (() => { const d = destinationCoords(order); return { lat: d.lat, lng: d.lng, name: order.destinationName || 'Destination' }; })(),
+        depot:      { lat: FIXED_DEPOT.lat, lng: FIXED_DEPOT.lng, name: FIXED_DEPOT.name, address: FIXED_DEPOT.address },
+        dest:       (() => {
+          const d = destinationCoords(order);
+          return { lat: d.lat, lng: d.lng, name: order.destinationName || 'Destination', address: order.destinationAddress };
+        })(),
         startedAt:  order.tripStartedAt ? new Date(order.tripStartedAt).getTime() : Date.now(),
         durationMs: JOURNEY_DURATION_MS,
       }]

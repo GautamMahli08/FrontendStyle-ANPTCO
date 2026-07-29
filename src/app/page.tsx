@@ -11,6 +11,8 @@ import {
   DEMO_PERSONAS,
   getProductMode,
   setProductMode,
+  personaLandingRoute,
+  MONITORING_PERSONA_IDS,
 } from '@/src/lib/demo-data';
 import NetworkMap from '@/src/components/maps/NetworkMap';
 import OomcoLogo from '@/src/components/assets/OomcoLogo';
@@ -76,16 +78,15 @@ const PERSONA_THEME: Record<string, { card: string; badge: string; iconBg: strin
 };
 
 // Persona layout per product mode — hide platform admin, client 2 and driver from the
-// selector. Both modes keep the Seller Manager: in Monitoring-Only the seller loses the
-// marketplace screens but still owns full fleet monitoring (see Sidebar gating).
+// selector. Monitoring-Only ships seller-facing for now, so it offers that persona
+// alone and drops straight into Fleet Monitor (see MONITORING_PERSONA_IDS).
 const PERSONA_ROWS_BY_MODE: Record<ProductMode, string[][]> = {
   full: [
     ['client-001', 'seller-001'],
     ['tsp-001', 'tsp-002'],
   ],
   monitoring: [
-    ['client-001', 'seller-001'],
-    ['tsp-001', 'tsp-002'],
+    MONITORING_PERSONA_IDS,
   ],
 };
 
@@ -115,20 +116,22 @@ export default function Home() {
     setLoading(personaId);
     const persona = DEMO_PERSONAS.find(p => p.id === personaId);
     if (!persona) { setLoading(null); return; }
+    // Monitoring-Only has no dashboard — land on Fleet Monitor instead.
+    const route = personaLandingRoute(persona, mode);
     if (persona.role === 'PLATFORM_ADMIN') {
-      setCurrentUser(PLATFORM_ADMIN); router.push(persona.route); return;
+      setCurrentUser(PLATFORM_ADMIN); router.push(route); return;
     }
     if (persona.role === 'DRIVER') {
       const driver = getDrivers().find(d => d.id === personaId);
       if (driver) {
         setCurrentUser({ id: driver.id, email: driver.email, firstName: driver.firstName,
           lastName: driver.lastName, role: 'DRIVER', workspaceId: driver.workspaceId, verified: true });
-        router.push(persona.route);
+        router.push(route);
       }
       return;
     }
     const user = getUsers().find(u => u.id === personaId);
-    if (user) { setCurrentUser(user); router.push(persona.route); }
+    if (user) { setCurrentUser(user); router.push(route); }
     setLoading(null);
   };
 
@@ -251,12 +254,23 @@ export default function Home() {
           <section className="animate-fade-up stagger-3">
             <div className="text-center mb-3">
               <h2 className="text-base font-bold text-slate-700">Enter the Platform</h2>
-              <p className="text-slate-400 text-xs mt-0.5">Select a role to explore its dashboard — no login required</p>
+              <p className="text-slate-400 text-xs mt-0.5">
+                {mode === 'monitoring'
+                  ? 'Opens straight into live fleet monitoring — no login required'
+                  : 'Select a role to explore its dashboard — no login required'}
+              </p>
             </div>
 
             <div className="space-y-2 max-w-3xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-3">
               {personaRows.map((row, ri) => (
-                <div key={ri} className={`grid gap-2 ${row.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
+                <div
+                  key={ri}
+                  className={`grid gap-2 ${
+                    row.length === 1 ? 'sm:grid-cols-1 sm:max-w-md sm:mx-auto'
+                  : row.length === 2 ? 'sm:grid-cols-2'
+                                     : 'sm:grid-cols-3'
+                  }`}
+                >
                   {row
                     .map(id => DEMO_PERSONAS.find(p => p.id === id))
                     .filter((persona): persona is typeof DEMO_PERSONAS[number] => Boolean(persona))

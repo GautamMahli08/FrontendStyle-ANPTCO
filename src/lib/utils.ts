@@ -4,6 +4,14 @@ export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
 
+/** Escape a value for interpolation into hand-built HTML (Leaflet tooltips/popups). */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(
+    /[&<>"]/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!),
+  );
+}
+
 export function formatDate(date: Date): string {
   return new Intl.DateTimeFormat('en-GB', {
     day: '2-digit',

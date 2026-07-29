@@ -8,7 +8,18 @@ import OomcoLogo from '@/src/components/assets/OomcoLogo';
 
 // Items tagged `module: 'ordering'` belong to the marketplace workflow and are hidden
 // in Monitoring-Only mode. Untagged items (monitoring, onboarding) are always shown.
-type NavItem = { name: string; path: string; icon: string; module?: 'ordering' };
+type NavItem = {
+  name: string;
+  path: string;
+  icon: string;
+  module?: 'ordering';
+  /**
+   * Hidden in Monitoring-Only mode. Distinct from `module: 'ordering'` — the page
+   * isn't part of the marketplace, we just don't surface it in that product. The
+   * route still exists and works if navigated to directly.
+   */
+  hideInMonitoring?: boolean;
+};
 
 const nav: Record<UserRole, NavItem[]> = {
   PLATFORM_ADMIN: [
@@ -20,7 +31,9 @@ const nav: Record<UserRole, NavItem[]> = {
   ],
 
   SELLER_MANAGER: [
-    { name: 'Dashboard',       path: '/seller/dashboard',       icon: '🏠' },
+    // Monitoring-Only opens straight into Fleet Monitor; the seller dashboard is
+    // almost entirely order/KYC data, which that product doesn't have.
+    { name: 'Dashboard',       path: '/seller/dashboard',       icon: '🏠', hideInMonitoring: true },
     { name: 'Orders',          path: '/seller/orders',          icon: '📦', module: 'ordering' },
     { name: 'Fleet Monitor',   path: '/seller/fleet-monitor',   icon: '🗺️' },
     { name: 'KYC Review',      path: '/seller/kyc-review',      icon: '📄', module: 'ordering' },
@@ -76,7 +89,10 @@ export default function Sidebar({ userRole }: { userRole: UserRole }) {
   useEffect(() => { setMode(getProductMode()); }, []);
   const modules = getModules(mode);
 
-  const items = (nav[userRole] ?? []).filter(i => !i.module || modules[i.module]);
+  const items = (nav[userRole] ?? []).filter(i =>
+    (!i.module || modules[i.module]) &&
+    !(mode === 'monitoring' && i.hideInMonitoring)
+  );
 
   function isActive(path: string) {
     if (pathname === path) return true;

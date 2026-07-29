@@ -1,11 +1,21 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import {
   getOrders, getTrucks, getFuelAnomalies, updateFuelAnomaly,
   advanceJourneys, advanceLoading, OFFLOAD_DURATION_MS, shortOrderId,
+  FIXED_DEPOT, JOURNEY_DURATION_MS, destinationCoords,
 } from '@/src/lib/demo-data';
 import TruckFocusPanel from '@/src/components/fleet/TruckFocusPanel';
+import type { Journey } from '@/src/components/maps/LiveTrackingMap';
+import { escapeHtml as esc } from '@/src/lib/utils';
+
+// Leaflet touches `window`, so load the overview map only on the client.
+const LiveTrackingMap = dynamic(() => import('@/src/components/maps/LiveTrackingMap'), {
+  ssr: false,
+  loading: () => <div className="w-full h-[460px] flex items-center justify-center text-sm text-gray-400">Loading map…</div>,
+});
 
 const STATUS_PILL: Record<string, { label: string; cls: string }> = {
   IDLE:      { label: 'Idle',           cls: 'bg-emerald-100 text-emerald-700' },
@@ -31,9 +41,52 @@ const ANOMALY_STATUS_STYLE: Record<string, string> = {
 
 const ACTIVE_STATUSES = ['ASSIGNED', 'LOADING', 'LOADED', 'EN_ROUTE', 'ARRIVED'];
 
+// Overview map legend — mirrors TRUCK_BG in LiveTrackingMap.
+const LEGEND = [
+  { label: 'At depot', color: '#06b6d4' },
+  { label: 'En route', color: '#f59e0b' },
+  { label: 'Arrived',  color: '#10b981' },
+  { label: 'Idle',     color: '#94a3b8' },
+];
+
+// Statuses where the truck is actually on the road (everything else parks at the depot).
+const ON_ROAD_STATUSES = ['EN_ROUTE', 'ARRIVED'];
+
+// Ring radius used to fan parked trucks out around the depot (~1 km) so each one
+// stays individually hoverable instead of collapsing into a single pin.
+const DEPOT_FAN_RADIUS = 0.010;
+
 type Filter = 'order' | 'truck';
 type Selection = { type: Filter; id: string } | null;
-type Item = { key: string; sel: { type: Filter; id: string }; title: string; sub: string; status: string; alert: boolean; search: string };
+type Item = {
+  key: string; sel: { type: Filter; id: string }; title: string; sub: string;
+  status: string; alert: boolean; search: string;
+  order: any | null; truck: any | null;
+};
+
+/** Hover card for a truck on the fleet-overview map. */
+function tooltipHtml(item: Item): string {
+  const pill = STATUS_PILL[item.status] ?? { label: String(item.status).replace(/_/g, ' ') };
+  const o = item.order;
+  const lines: string[] = [];
+
+  lines.push(o
+    ? `<div style="color:#64748b">Order <b style="color:#0f172a">#${esc(shortOrderId(o.id))}</b></div>`
+    : `<div style="color:#94a3b8">No active delivery</div>`);
+  if (o?.destinationName)  lines.push(`<div style="color:#64748b">→ ${esc(o.destinationName)}</div>`);
+  if (o?.assignedDriverName) lines.push(`<div style="color:#64748b">👤 ${esc(o.assignedDriverName)}</div>`);
+  if (o?.volume)           lines.push(`<div style="color:#64748b">🛢️ ${esc(o.volume.toLocaleString())}L ${esc(o.fuelType)}</div>`);
+  if (item.alert)          lines.push(`<div style="color:#dc2626;font-weight:700">🚨 Fuel anomaly open</div>`);
+
+  return `<div style="font-family:inherit;font-size:12px;line-height:1.5;min-width:150px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+        <b style="font-size:13px;color:#0f172a">🚛 ${esc(item.truck?.registrationNumber ?? o?.assignedTruckRegistration ?? '—')}</b>
+        <span style="font-size:10px;font-weight:700;color:#475569;background:#f1f5f9;border-radius:9999px;padding:1px 6px">${esc(pill.label)}</span>
+      </div>
+      ${lines.join('')}
+      <div style="color:#94a3b8;margin-top:4px;font-size:11px">Click to track</div>
+    </div>`;
+}
 
 export default function FleetMonitorView({ user, allowTruckFilter }: { user: any; allowTruckFilter: boolean }) {
   const isSeller = user.role === 'SELLER_MANAGER';
@@ -43,10 +96,8 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
   const [anomalies, setAnomalies] = useState<any[]>([]);
   const [filter,    setFilter]    = useState<Filter>('order');
   const [selection, setSelection] = useState<Selection>(null);
-  // search combobox
+  // Free-text filter over the side list (not a dropdown — the list IS the picker).
   const [query, setQuery] = useState('');
-  const [open,  setOpen]  = useState(false);
-  const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(() => {
     advanceLoading();
@@ -104,6 +155,7 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
           key: t.id, sel: { type: 'truck' as Filter, id: t.id }, title: t.registrationNumber, sub, status,
           alert: openAnomalies.some(a => a.truckReg === t.registrationNumber),
           search: `${t.registrationNumber} ${order?.destinationName ?? ''}`.toLowerCase(),
+          order, truck: t,
         };
       })
     : trackableOrders.map(o => ({
@@ -111,17 +163,61 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
         title: `#${shortOrderId(o.id)}`, sub: `${o.assignedTruckRegistration ?? '—'} · → ${o.destinationName}`, status: o.status,
         alert: openAnomalies.some(a => a.truckReg === o.assignedTruckRegistration),
         search: `${shortOrderId(o.id)} ${o.id} ${o.assignedTruckRegistration ?? ''} ${o.destinationName ?? ''}`.toLowerCase(),
+        order: o, truck: trucks.find(t => t.id === o.assignedTruckId) ?? null,
       }));
 
-  const q = query.trim().toLowerCase();
-  const suggestions = q ? allItems.filter(i => i.search.includes(q)) : allItems;
+  // ── Fleet overview (nothing selected) ────────────────────────
+  // Every item in the current filter becomes a marker: trucks on the road ride
+  // their route, the rest park in a ring around the depot. Journey ids match the
+  // item keys, so a marker click feeds straight back into `choose`.
+  const depot = { lat: FIXED_DEPOT.lat, lng: FIXED_DEPOT.lng, name: FIXED_DEPOT.name, address: FIXED_DEPOT.address };
+  const parkedKeys = allItems
+    .filter(i => !(i.order && ON_ROAD_STATUSES.includes(i.order.status)))
+    .map(i => i.key);
 
-  const choose = (item: Item) => {
-    setSelection(item.sel);
-    setQuery(item.title);
-    setOpen(false);
+  const overviewJourneys: Journey[] = allItems.map(item => {
+    const o = item.order;
+    const parkedAt = parkedKeys.indexOf(item.key);
+    // Only fan out parked trucks, and only when more than one shares the depot.
+    const angle = parkedAt >= 0 && parkedKeys.length > 1
+      ? (2 * Math.PI * parkedAt) / parkedKeys.length
+      : null;
+
+    return {
+      id:         item.key,
+      truckReg:   item.truck?.registrationNumber ?? o?.assignedTruckRegistration ?? '—',
+      status:     item.status,
+      depot,
+      dest: o
+        ? { ...destinationCoords(o), name: o.destinationName || 'Destination', address: o.destinationAddress }
+        : undefined,
+      startedAt:  o?.tripStartedAt ? new Date(o.tripStartedAt).getTime() : 0,
+      durationMs: JOURNEY_DURATION_MS,
+      at: item.truck?.currentLat != null && item.truck?.currentLng != null
+        ? { lat: item.truck.currentLat, lng: item.truck.currentLng }
+        : undefined,
+      offset: angle == null
+        ? undefined
+        : [Math.sin(angle) * DEPOT_FAN_RADIUS, Math.cos(angle) * DEPOT_FAN_RADIUS],
+      tooltip: tooltipHtml(item),
+      alert:   item.alert,
+    };
+  });
+
+  const q = query.trim().toLowerCase();
+  const visibleItems = q ? allItems.filter(i => i.search.includes(q)) : allItems;
+
+  // Selecting no longer rewrites the query — the text box filters the list, so
+  // stuffing the chosen title into it would collapse the list to a single row.
+  const choose = (item: Item) => setSelection(item.sel);
+  const clearSelection = () => setSelection(null);
+
+  // Clicking a truck on the overview map is the same action as picking it from the
+  // side list — both drop into the focused-tracking flow.
+  const selectFromMap = (id: string) => {
+    const item = allItems.find(i => i.key === id);
+    if (item) choose(item);
   };
-  const clearSelection = () => { setSelection(null); setQuery(''); setOpen(false); };
 
   return (
     <main className="p-6 space-y-6">
@@ -130,7 +226,9 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
         <div>
           <h1 className="text-2xl font-black text-gray-900">Fleet Monitor</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            {allowTruckFilter ? 'Search by order ID or truck, then watch it live' : 'Search a delivery to watch its truck fuel up, drive and offload'}
+            {hasFocus
+              ? 'Pick another from the list, or go back to the fleet overview'
+              : 'Pick from the list on the left, or click a truck on the map, to track it live'}
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600">
@@ -139,105 +237,141 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
         </div>
       </div>
 
-      {/* ── TOP FILTER BAR ── */}
-      <div className="bg-white border border-gray-200 rounded-2xl p-3 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-        {/* Order/Truck toggle (TSP only) */}
-        {allowTruckFilter && (
-          <div className="grid grid-cols-2 gap-1 bg-slate-100 rounded-xl p-1 sm:w-56 flex-shrink-0">
-            {(['order', 'truck'] as Filter[]).map(f => (
-              <button
-                key={f}
-                onClick={() => { setFilter(f); clearSelection(); }}
-                className={`text-xs font-bold py-2 rounded-lg transition ${filter === f ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                {f === 'order' ? '📦 Orders' : '🚛 Trucks'}
-              </button>
-            ))}
-          </div>
-        )}
+      <div className="flex flex-col lg:flex-row gap-4 items-start">
 
-        {/* Searchable combobox */}
-        <div className="relative flex-1 min-w-0">
-          <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 h-11 focus-within:border-blue-400 transition">
-            <svg className="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
-            </svg>
-            <input
-              value={query}
-              onChange={e => { setQuery(e.target.value); setOpen(true); }}
-              onFocus={() => setOpen(true)}
-              onBlur={() => { blurTimer.current = setTimeout(() => setOpen(false), 150); }}
-              placeholder={filter === 'truck' ? 'Search truck reg (e.g. TRK-001)…' : 'Search order ID (e.g. ' + (allItems[0]?.title.replace('#','') ?? 'A1B2C3') + ')…'}
-              className="flex-1 min-w-0 text-sm bg-transparent outline-none placeholder:text-gray-400"
-            />
-            {(selection || query) && (
-              <button onClick={clearSelection} title="Clear" className="text-gray-300 hover:text-gray-600 flex-shrink-0">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
+        {/* ── LEFT: ACTIVE LIST ── */}
+        <aside className="w-full lg:w-80 flex-shrink-0 bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+          <div className="p-3 border-b border-gray-100 space-y-2">
+            {/* Order/Truck toggle (TSP only) */}
+            {allowTruckFilter && (
+              <div className="grid grid-cols-2 gap-1 bg-slate-100 rounded-xl p-1">
+                {(['order', 'truck'] as Filter[]).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => { setFilter(f); clearSelection(); setQuery(''); }}
+                    className={`text-xs font-bold py-2 rounded-lg transition ${filter === f ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                    {f === 'order' ? '📦 Orders' : '🚛 Trucks'}
+                  </button>
+                ))}
+              </div>
             )}
-          </div>
 
-          {/* Dropdown */}
-          {open && (
-            <div
-              className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-lg max-h-72 overflow-y-auto"
-              onMouseDown={() => { if (blurTimer.current) clearTimeout(blurTimer.current); }}
-            >
-              {suggestions.length === 0 ? (
-                <p className="px-4 py-3 text-sm text-gray-400">No matches</p>
-              ) : (
-                suggestions.map(item => {
-                  const pill = STATUS_PILL[item.status] ?? { label: String(item.status).replace(/_/g, ' '), cls: 'bg-gray-100 text-gray-500' };
-                  return (
-                    <button
-                      key={item.key}
-                      onClick={() => choose(item)}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-slate-50 transition"
-                    >
-                      <span className="text-base flex-shrink-0">{filter === 'truck' ? '🚛' : '📦'}</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <p className="font-bold text-gray-900 text-sm truncate">{item.title}</p>
-                          {item.alert && <span className="text-[10px] font-black text-red-600 bg-red-100 px-1 rounded-full animate-pulse">🚨</span>}
-                        </div>
-                        <p className="text-xs text-gray-400 truncate">{item.sub}</p>
-                      </div>
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${pill.cls}`}>{pill.label}</span>
-                    </button>
-                  );
-                })
+            {/* Filter box — narrows the list below, no dropdown */}
+            <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 h-10 focus-within:border-blue-400 transition">
+              <svg className="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+              </svg>
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder={filter === 'truck' ? 'Filter trucks…' : 'Filter deliveries…'}
+                className="flex-1 min-w-0 text-sm bg-transparent outline-none placeholder:text-gray-400"
+              />
+              {query && (
+                <button onClick={() => setQuery('')} title="Clear filter" className="text-gray-300 hover:text-gray-600 flex-shrink-0">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
               )}
             </div>
-          )}
-        </div>
 
-        {/* Quick count */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-xs text-gray-400 px-2">{allItems.length} {filter === 'truck' ? 'trucks' : 'active'}</span>
-        </div>
-      </div>
+            <div className="flex items-center justify-between px-0.5">
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">
+                {filter === 'truck' ? 'Fleet' : 'Active deliveries'}
+              </p>
+              <span className="text-[11px] text-gray-400">
+                {q ? `${visibleItems.length} of ${allItems.length}` : allItems.length}
+              </span>
+            </div>
+          </div>
 
-      {/* ── CONTENT ── */}
+          {/* The list itself — always visible, so the fleet can be scanned at a glance
+              and a different truck is one click away even while focused on another. */}
+          <div className="max-h-[520px] overflow-y-auto divide-y divide-gray-50">
+            {visibleItems.length === 0 ? (
+              <p className="px-4 py-8 text-sm text-gray-400 text-center">
+                {allItems.length === 0
+                  ? (filter === 'truck' ? 'No trucks yet' : 'No active deliveries')
+                  : 'No matches'}
+              </p>
+            ) : visibleItems.map(item => {
+              const pill     = STATUS_PILL[item.status] ?? { label: String(item.status).replace(/_/g, ' '), cls: 'bg-gray-100 text-gray-500' };
+              const isActive = selection?.id === item.sel.id && selection?.type === item.sel.type;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => choose(item)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-left transition border-l-[3px] ${
+                    isActive ? 'bg-blue-50 border-blue-600' : 'border-transparent hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="text-base flex-shrink-0">{filter === 'truck' ? '🚛' : '📦'}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <p className={`font-bold text-sm truncate ${isActive ? 'text-blue-800' : 'text-gray-900'}`}>{item.title}</p>
+                      {item.alert && <span className="text-[10px] font-black text-red-600 bg-red-100 px-1 rounded-full animate-pulse">🚨</span>}
+                    </div>
+                    <p className="text-xs text-gray-400 truncate">{item.sub}</p>
+                    <span className={`inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${pill.cls}`}>{pill.label}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        {/* ── RIGHT: MAP OR FOCUSED TRUCK ── */}
+        <div className="flex-1 min-w-0 w-full space-y-4">
       {hasFocus ? (
         <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+          <button
+            onClick={clearSelection}
+            className="mb-3 inline-flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-gray-900 border border-gray-200 hover:border-gray-300 rounded-lg px-2.5 py-1.5 transition"
+          >
+            ← Fleet overview
+          </button>
           <TruckFocusPanel order={focusedOrder} truck={focusedTruck} />
         </div>
       ) : (
         <>
-          {/* No multi-trip overview — both seller and TSP track one delivery at a
-              time to avoid clutter when several trips run at once. Prompt to search. */}
-          <section className="bg-white border border-gray-200 rounded-2xl shadow-sm">
-            <div className="w-full h-[460px] flex flex-col items-center justify-center text-center px-6">
-              <p className="text-3xl mb-2">🔍</p>
-              <p className="text-sm font-semibold text-gray-600">
-                Search {allowTruckFilter ? 'a delivery or truck' : 'a delivery'} to track it
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                {allowTruckFilter
-                  ? 'Pick an order ID or truck above to watch it fuel up, drive and offload'
-                  : 'Enter an order ID above to watch its truck fuel up, drive and offload'}
-              </p>
-            </div>
+          {/* Fleet overview — every truck in the current filter on one map. Hover for
+              details, click to drop into the single-truck tracking view below. */}
+          <section className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+            {overviewJourneys.length > 0 ? (
+              <>
+                <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-100">
+                  <div>
+                    <p className="text-sm font-bold text-gray-900">Fleet overview</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Hover a truck for its details · click it to track that delivery
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    {LEGEND.map(l => (
+                      <span key={l.label} className="hidden sm:flex items-center gap-1.5 text-[11px] text-gray-400 font-medium">
+                        <span className="w-2.5 h-2.5 rounded-[3px]" style={{ background: l.color }} />
+                        {l.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <LiveTrackingMap
+                  journeys={overviewJourneys}
+                  onSelect={selectFromMap}
+                  className="w-full h-[460px]"
+                />
+              </>
+            ) : (
+              <div className="w-full h-[460px] flex flex-col items-center justify-center text-center px-6">
+                <p className="text-3xl mb-2">🅿️</p>
+                <p className="text-sm font-semibold text-gray-600">
+                  No {allowTruckFilter ? 'trucks' : 'active deliveries'} to show
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Trucks appear here as soon as a delivery is assigned to them.
+                </p>
+              </div>
+            )}
           </section>
 
           {/* Theft alerts */}
@@ -293,6 +427,8 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
           )}
         </>
       )}
+        </div>
+      </div>
     </main>
   );
 }

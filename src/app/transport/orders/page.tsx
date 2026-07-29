@@ -152,7 +152,8 @@ export default function TransportOrdersPage() {
           truckReg:       order.assignedTruckRegistration ?? 'TRK',
           compartment:    'C1 (Petrol)',
           fuelDropLiters: 320,
-          location:       'Al Khuwair — off-route stop, 18 min',
+          // Kept destination-neutral: this order may be headed to either station.
+          location:       'Off-route stop — 18 min',
           detectedAt:     new Date(),
           severity:       'HIGH',
           status:         'OPEN',
@@ -160,7 +161,7 @@ export default function TransportOrdersPage() {
         addNotification({
           id: `notif-theft-${Date.now()}`, userId: 'seller-001',
           type: 'FUEL_ANOMALY', title: '🚨 Fuel Anomaly Detected',
-          message: `Unexpected fuel drop of 320L on truck ${order.assignedTruckRegistration} (C1 Petrol) during Order #${shortOrderId(order.id)}. Location: Al Khuwair.`,
+          message: `Unexpected fuel drop of 320L on truck ${order.assignedTruckRegistration} (C1 Petrol) during Order #${shortOrderId(order.id)}. Truck deviated from its route to ${order.destinationName ?? 'the station'}.`,
           read: false, createdAt: new Date(),
         });
       }, 3000);

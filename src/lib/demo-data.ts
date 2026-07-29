@@ -15,10 +15,11 @@ import {
   Driver,
   ProductMode,
   ProductModules,
+  UserRole,
 } from '@/src/types';
 
 // ── Demo version — bump this to force a full localStorage reset ──
-const DEMO_VERSION = 'v3.6';
+const DEMO_VERSION = 'v3.7';
 const VERSION_KEY  = 'fuel_demo_version';
 
 // Product mode is intentionally a standalone key (not in STORAGE_KEYS) so it
@@ -97,15 +98,26 @@ export const FIXED_DEPOT = {
 // The live level = base + fuel received from completed deliveries (capped at
 // capacity). This is the single source of truth for BOTH the client dashboard
 // reserves and the order-capacity validation, so they can never disagree.
+//
+// SITING RULES — the two stations must sit on genuinely different roads out of the
+// depot, and both must be inland:
+//   · The depot (Seeb) is coastal; the Gulf of Oman lies to the NORTH-EAST. Any
+//     destination placed further along the coast makes the straight-line fallback
+//     path (drawn before the OSRM road route resolves) cut across open water.
+//   · Stations previously sat at Qurum and Al Khuwair — both ESE on the same
+//     coastal highway, with Al Khuwair *en route* to Qurum, so the two journeys
+//     overlapped for most of their length.
+// Station A now runs SE inland (Muscat Expressway → Al Amerat) and Station B runs
+// SW inland (Batinah highway → Nakhal): ~110° apart, diverging at the depot gate.
 export const DELIVERY_ZONES = [
   {
-    id: 'qurum-station',
+    id: 'amerat-station',
     name: 'Station A',
-    lat: 23.612703,
-    lng: 58.498615,
+    lat: 23.515000,
+    lng: 58.495000,
     radius: 250,
     clientName: 'Client 1',
-    address: 'Qurum, Muscat, Oman',
+    address: 'Al Amerat, Muscat, Oman',
     type: 'Petrol Station',
     // Capacities & seed levels are whole multiples of one compartment (9,100 L)
     // so many compartment-sized orders fit before a tank fills.
@@ -116,13 +128,13 @@ export const DELIVERY_ZONES = [
     } as Record<string, { base: number; capacity: number }>,
   },
   {
-    id: 'khuwair-station',
+    id: 'nakhal-station',
     name: 'Station B',
-    lat: 23.586549,
-    lng: 58.431447,
+    lat: 23.395600,
+    lng: 57.828600,
     radius: 250,
     clientName: 'Client 2',
-    address: 'Al Khuwair, Muscat, Oman',
+    address: 'Nakhal, South Al Batinah, Oman',
     type: 'Petrol Station',
     fuels: {
       DIESEL:  { base: 9100, capacity: 182000 },  // 1 / 20 compartments
@@ -1151,6 +1163,24 @@ export const getModules = (mode: ProductMode = getProductMode()): ProductModules
   mode === 'monitoring'
     ? { ordering: false, monitoring: true, dispatchApi: true }
     : { ordering: true,  monitoring: true, dispatchApi: false };
+
+// Monitoring-Only currently ships as a seller-facing product, so the demo exposes
+// just that persona. Kept as a list (not a constant) so re-enabling the transporter
+// or client is a one-line change.
+export const MONITORING_PERSONA_IDS = ['seller-001'];
+
+// In Monitoring-Only there is no dashboard to land on — the product IS the fleet
+// map, so a persona opens straight into it.
+const MONITORING_HOME: Partial<Record<UserRole, string>> = {
+  SELLER_MANAGER:  '/seller/fleet-monitor',
+  TRANSPORT_ADMIN: '/transport/fleet-monitor',
+};
+
+/** Where a persona lands after login / a demo role switch, for the active product mode. */
+export const personaLandingRoute = (
+  persona: { role: UserRole; route: string },
+  mode: ProductMode = getProductMode(),
+): string => (mode === 'monitoring' ? MONITORING_HOME[persona.role] ?? persona.route : persona.route);
 
 // ── Utility ───────────────────────────────────────────────────
 export const findUserByEmail = (email: string): User | undefined =>

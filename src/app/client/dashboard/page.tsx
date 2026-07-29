@@ -73,8 +73,8 @@ const FUEL_META: Record<string, { label: string; barColor: string; textColor: st
 // Display metadata only — fuel base/capacity/levels come from the shared
 // stationFuelLevels() helper so the dashboard and order validation always agree.
 const STATION_META = [
-  { id: 'qurum-station',   name: 'Station A', sub: 'Qurum, Muscat'     },
-  { id: 'khuwair-station', name: 'Station B', sub: 'Al Khuwair, Muscat' },
+  { id: 'amerat-station', name: 'Station A', sub: 'Al Amerat, Muscat'  },
+  { id: 'nakhal-station', name: 'Station B', sub: 'Nakhal, Al Batinah' },
 ];
 const FUEL_KEYS = ['DIESEL', 'PETROL', 'PREMIUM'] as const;
 
