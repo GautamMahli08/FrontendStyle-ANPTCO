@@ -21,6 +21,12 @@ export type Journey = {
   dest:  { lat: number; lng: number; name: string };
   startedAt: number;                                // ms epoch
   durationMs: number;
+  // When set, the truck marker sits at this fixed point instead of the
+  // time-based road interpolation — used for "stopped here" / "last known
+  // position" alert states, where the map should keep rendering (same
+  // depot/destination/route context) rather than being swapped for a
+  // generic placeholder, but the truck itself isn't actually progressing.
+  frozenPosition?: { lat: number; lng: number };
 };
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -112,12 +118,13 @@ function pinIcon(emoji: string, bg: string, size = 30) {
 }
 
 function truckIcon(j: Journey) {
-  const bg = j.status === 'ARRIVED' ? '#10b981' : '#f59e0b';
+  const bg = j.frozenPosition ? '#dc2626' : j.status === 'ARRIVED' ? '#10b981' : '#f59e0b';
+  const emoji = j.frozenPosition ? '🛑' : '🚛';
   return L.divIcon({
     className: '',
     html: `<div style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;
       background:${bg};border-radius:9px;color:white;font-size:17px;
-      box-shadow:0 3px 8px rgba(0,0,0,.35);border:2px solid white;">🚛</div>`,
+      box-shadow:0 3px 8px rgba(0,0,0,.35);border:2px solid white;">${emoji}</div>`,
     iconSize: [34, 34],
     iconAnchor: [17, 17],
     popupAnchor: [0, -18],
@@ -185,9 +192,10 @@ export default function LiveTrackingMap({
       const seen = new Set<string>();
       js.forEach(j => {
         seen.add(j.id);
-        const t = progress(j);
         const route = routesRef.current.get(j.id) ?? getRoutePath(j.depot, j.dest);
-        const [lat, lng] = routePosition(route, t);
+        const [lat, lng] = j.frozenPosition
+          ? [j.frozenPosition.lat, j.frozenPosition.lng]
+          : routePosition(route, progress(j));
 
         let layer = layersRef.current.get(j.id);
         if (!layer) {

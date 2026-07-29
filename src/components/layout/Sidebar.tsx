@@ -7,8 +7,11 @@ import { logout, getProductMode, getModules } from '@/src/lib/demo-data';
 import OomcoLogo from '@/src/components/assets/OomcoLogo';
 
 // Items tagged `module: 'ordering'` belong to the marketplace workflow and are hidden
-// in Monitoring-Only mode. Untagged items (monitoring, onboarding) are always shown.
-type NavItem = { name: string; path: string; icon: string; module?: 'ordering' };
+// in Monitoring-Only mode. Items tagged `monitoringOnly` are the reverse — they only
+// apply to a Monitoring-Only tenant that owns its own fleet directly (e.g. XYZ
+// Petroleum), so they're hidden for a Full Platform seller who sources trucks from
+// separate transporters instead. Untagged items are always shown.
+type NavItem = { name: string; path: string; icon: string; module?: 'ordering'; monitoringOnly?: boolean };
 
 const nav: Record<UserRole, NavItem[]> = {
   PLATFORM_ADMIN: [
@@ -24,6 +27,9 @@ const nav: Record<UserRole, NavItem[]> = {
     { name: 'Dashboard',       path: '/seller/dashboard',       icon: '🏠' },
     { name: 'Orders',          path: '/seller/orders',          icon: '📦', module: 'ordering' },
     { name: 'Fleet Monitor',   path: '/seller/fleet-monitor',   icon: '🗺️' },
+    { name: 'Order History',  path: '/seller/order-history',   icon: '🧾' },
+    { name: 'My Trucks',      path: '/seller/trucks',          icon: '🚛', monitoringOnly: true },
+    { name: 'Drivers',        path: '/seller/drivers',         icon: '👥', monitoringOnly: true },
     { name: 'KYC Review',      path: '/seller/kyc-review',      icon: '📄', module: 'ordering' },
     { name: 'Transporters',    path: '/seller/transporters',    icon: '🚛', module: 'ordering' },
   ],
@@ -77,7 +83,9 @@ export default function Sidebar({ userRole }: { userRole: UserRole }) {
   useEffect(() => { setMode(getProductMode()); }, []);
   const modules = getModules(mode);
 
-  const items = (nav[userRole] ?? []).filter(i => !i.module || modules[i.module]);
+  const items = (nav[userRole] ?? []).filter(i =>
+    (!i.module || modules[i.module]) && (!i.monitoringOnly || mode === 'monitoring')
+  );
 
   function isActive(path: string) {
     if (pathname === path) return true;

@@ -5,202 +5,254 @@ import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header from '@/src/components/layout/Header';
 import StatusBadge from '@/src/components/workflow/StatusBadge';
-import { getCurrentUser, setCurrentUser, getUsers, getTrucks } from '@/src/lib/demo-data';
+import ToggleSwitch from '@/src/components/ui/ToggleSwitch';
+import { getCurrentUser, getTrucks, updateTruck } from '@/src/lib/demo-data';
+import { downloadTruckQrPdf, truckQrDataUrl } from '@/src/lib/truck-qr';
+import { getAssignmentHistory } from '@/src/lib/device-assignment';
 
 export default function SellerTrucksPage() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [mounted, setMounted] = useState(false);
   const [trucks, setTrucks] = useState<any[]>([]);
-  const [filter, setFilter] = useState<string>('ALL');
+  const [selectedTruck, setSelectedTruck] = useState<any>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [qrPreview, setQrPreview] = useState<string | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
 
   useEffect(() => {
     setMounted(true);
     const currentUser = getCurrentUser();
+    if (!currentUser || currentUser.role !== 'SELLER_MANAGER') { router.push('/'); return; }
     setUser(currentUser);
-    
-    if (currentUser) {
-      loadTrucks();
-    }
-  }, []);
+    loadTrucks(currentUser);
+  }, [router]);
 
-  const loadTrucks = () => {
-    const allTrucks = getTrucks();
-    setTrucks(allTrucks);
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(() => loadTrucks(user), 3000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  // Generate a live QR preview (encoding the truck ID) whenever the detail modal opens.
+  useEffect(() => {
+    setQrPreview(null);
+    if (showModal && selectedTruck) {
+      truckQrDataUrl(selectedTruck).then(setQrPreview).catch(() => setQrPreview(null));
+    }
+  }, [showModal, selectedTruck]);
+
+  const loadTrucks = (currentUser: any) => {
+    setTrucks(getTrucks().filter((t: any) => t.workspaceId === currentUser.workspaceId));
   };
 
-  const handleRoleChange = (userId: string) => {
-    const users = getUsers();
-    const newUser = users.find(u => u.id === userId);
-    if (newUser) {
-      setUser(newUser);
-      setCurrentUser(newUser);
-      
-      const routes: Record<string, string> = {
-        PLATFORM_ADMIN: '/platform-admin/dashboard',
-        SELLER_MANAGER: '/seller/dashboard',
-        TRANSPORT_ADMIN: '/transport/dashboard',
-        CLIENT: '/client/dashboard',
-        DRIVER: '/driver/dashboard',
-      };
-      router.push(routes[newUser.role]);
-    }
+  const toggleTruck = (truck: any) => {
+    updateTruck(truck.id, { disabled: !truck.disabled });
+    if (user) loadTrucks(user);
   };
 
-  if (!mounted) return null;
-  
-  if (!user) {
-    router.push('/');
-    return null;
-  }
-  
-  if (user.role !== 'SELLER_MANAGER') {
-    router.push('/');
-    return null;
-  }
+  if (!mounted || !user) return null;
 
-  const filteredTrucks = filter === 'ALL' 
-    ? trucks 
-    : trucks.filter(t => t.status === filter);
+  const totalTrucks  = trucks.length;
+  const idleTrucks   = trucks.filter(t => t.status === 'IDLE').length;
+  const activeTrucks = trucks.filter(t => ['EN_ROUTE', 'ASSIGNED', 'LOADING', 'LOADED'].includes(t.status)).length;
+  const pendingTrucks = trucks.filter(t => ['PENDING_SELLER_APPROVAL', 'PENDING_ADMIN_APPROVAL', 'PENDING_INTEGRATION'].includes(t.status)).length;
 
   return (
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar userRole={user.role} />
-      
+
       <div className="flex-1">
         <Header user={user} />
-        
+
         <main className="p-8">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">All Trucks</h1>
-            <p className="text-gray-600">View and manage all registered trucks across transport providers</p>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">My Trucks</h1>
+            <p className="text-gray-600">Your own fleet — {user.companyName ?? 'this tenant'}</p>
           </div>
 
-          {/* Stats */}
           <div className="grid grid-cols-4 gap-6 mb-8">
             <div className="bg-white rounded-lg p-6 border border-gray-200">
               <p className="text-sm text-gray-600 mb-1">Total Trucks</p>
-              <p className="text-3xl font-bold text-gray-900">{trucks.length}</p>
+              <p className="text-3xl font-bold text-gray-900">{totalTrucks}</p>
             </div>
             <div className="bg-white rounded-lg p-6 border border-gray-200">
               <p className="text-sm text-gray-600 mb-1">Idle</p>
-              <p className="text-3xl font-bold text-green-600">
-                {trucks.filter(t => t.status === 'IDLE').length}
-              </p>
+              <p className="text-3xl font-bold text-green-600">{idleTrucks}</p>
             </div>
             <div className="bg-white rounded-lg p-6 border border-gray-200">
               <p className="text-sm text-gray-600 mb-1">Active</p>
-              <p className="text-3xl font-bold text-blue-600">
-                {trucks.filter(t => ['EN_ROUTE', 'ASSIGNED'].includes(t.status)).length}
-              </p>
+              <p className="text-3xl font-bold text-blue-600">{activeTrucks}</p>
             </div>
             <div className="bg-white rounded-lg p-6 border border-gray-200">
               <p className="text-sm text-gray-600 mb-1">Pending Integration</p>
-              <p className="text-3xl font-bold text-orange-600">
-                {trucks.filter(t => t.status === 'PENDING_INTEGRATION').length}
+              <p className="text-3xl font-bold text-orange-600">{pendingTrucks}</p>
+            </div>
+          </div>
+
+          {pendingTrucks > 0 && (
+            <div className="bg-orange-50 rounded-lg p-4 mb-6 border border-orange-200">
+              <p className="text-orange-800 font-medium">
+                ⚠️ {pendingTrucks} truck(s) waiting for sensor/admin approval before QR activation.
               </p>
             </div>
-          </div>
+          )}
 
-          {/* Filters */}
-          <div className="bg-white rounded-lg p-4 mb-6 border border-gray-200">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-medium text-gray-700">Filter:</span>
-              <button
-                onClick={() => setFilter('ALL')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  filter === 'ALL' 
-                    ? 'bg-blue-600 text-white' 
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                All ({trucks.length})
-              </button>
-              <button
-                onClick={() => setFilter('IDLE')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  filter === 'IDLE' 
-                    ? 'bg-green-600 text-white' 
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Idle ({trucks.filter(t => t.status === 'IDLE').length})
-              </button>
-              <button
-                onClick={() => setFilter('EN_ROUTE')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  filter === 'EN_ROUTE' 
-                    ? 'bg-blue-600 text-white' 
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                En Route ({trucks.filter(t => t.status === 'EN_ROUTE').length})
-              </button>
-              <button
-                onClick={() => setFilter('PENDING_INTEGRATION')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  filter === 'PENDING_INTEGRATION' 
-                    ? 'bg-orange-600 text-white' 
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Pending ({trucks.filter(t => t.status === 'PENDING_INTEGRATION').length})
-              </button>
-            </div>
-          </div>
-
-          {/* Trucks Grid */}
-          {filteredTrucks.length > 0 ? (
+          {trucks.length > 0 ? (
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredTrucks.map((truck) => (
-                <div key={truck.id} className="bg-white rounded-xl p-6 border-2 border-gray-200 hover:border-blue-300 transition-all">
+              {trucks.map((truck: any) => (
+                <div
+                  key={truck.id}
+                  className={`bg-white rounded-xl p-6 border-2 transition-all cursor-pointer ${
+                    truck.disabled ? 'border-red-200 bg-red-50/40' : 'border-gray-200 hover:border-blue-300'
+                  }`}
+                  onClick={() => { setSelectedTruck(truck); setShowModal(true); }}
+                >
                   <div className="flex items-start justify-between mb-4">
                     <div>
-                      <h3 className="text-lg font-bold text-gray-900 mb-1">
-                        {truck.registrationNumber}
-                      </h3>
-                      <p className="text-sm text-gray-600">{truck.driverName}</p>
+                      <h3 className="text-lg font-bold text-gray-900 mb-1">{truck.registrationNumber}</h3>
+                      <p className="text-xs text-gray-500">{truck.compartments?.length ?? 0} compartments</p>
                     </div>
-                    <StatusBadge status={truck.status} />
+                    {truck.disabled ? (
+                      <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">🚫 Disabled</span>
+                    ) : (
+                      <StatusBadge status={truck.status} />
+                    )}
                   </div>
 
                   <div className="space-y-2 text-sm mb-4">
-                    <p className="text-gray-600">📞 {truck.driverPhone}</p>
-                    <p className="text-gray-600">
-                      📦 {truck.compartments?.length || 0} Compartments
-                    </p>
-                    <p className="text-gray-600">
-                      💧 Capacity: {truck.capacity?.toLocaleString() || 0}L
-                    </p>
-                    <p className="text-gray-600">
-                      📍 {truck.currentLat?.toFixed(4)}, {truck.currentLng?.toFixed(4)}
-                    </p>
+                    <p className="text-gray-600">📦 {truck.compartments?.length || 0} Compartments</p>
+                    <p className="text-gray-600">💧 Capacity: {truck.capacity?.toLocaleString() || 0}L</p>
                   </div>
 
-                  {truck.qrCode && (
-                    <div className="mt-4">
-                      <span className="inline-block bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-medium">
-                        ✓ QR Code Generated
-                      </span>
+                  {truck.qrCode ? (
+                    <div className="bg-green-50 rounded-lg p-3 border border-green-200">
+                      <p className="text-xs text-green-800 font-medium">✓ QR Code Generated</p>
+                      <p className="text-xs text-green-700">Truck ready for deliveries</p>
+                      <button
+                        onClick={async (e) => { e.stopPropagation(); await downloadTruckQrPdf(truck); }}
+                        className="mt-2 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-1.5 rounded-lg text-xs transition-colors"
+                      >
+                        ⬇️ Download QR (PDF)
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="bg-orange-50 rounded-lg p-3 border border-orange-200">
+                      <p className="text-xs text-orange-800 font-medium">⏳ Approval Pending</p>
+                      <p className="text-xs text-orange-700">Waiting for sensor/admin approval before QR activation</p>
                     </div>
                   )}
+
+                  <div className="mt-4 pt-3 border-t flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+                    <span className="text-xs font-medium text-gray-500">{truck.disabled ? 'Truck disabled' : 'Truck active'}</span>
+                    <ToggleSwitch size="sm" enabled={!truck.disabled} onChange={() => toggleTruck(truck)} />
+                  </div>
                 </div>
               ))}
             </div>
           ) : (
             <div className="bg-white rounded-xl p-12 text-center border border-gray-200">
               <span className="text-6xl mb-4 block">🚛</span>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">No Trucks Found</h3>
-              <p className="text-gray-600">
-                {filter === 'ALL' 
-                  ? 'No trucks registered in the system yet' 
-                  : `No trucks with status "${filter}"`
-                }
-              </p>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">No Trucks Registered</h3>
+              <p className="text-gray-600">No trucks are registered under this tenant yet.</p>
             </div>
           )}
         </main>
       </div>
+
+      {showModal && selectedTruck && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-1">{selectedTruck.registrationNumber}</h2>
+                <p className="text-sm text-gray-600">Truck ID: {selectedTruck.id}</p>
+              </div>
+              <button onClick={() => setShowModal(false)} className="text-gray-500 hover:text-gray-700 text-2xl">✕</button>
+            </div>
+
+            <div className="space-y-4 mb-6">
+              <div className="bg-gray-50 rounded-lg p-4">
+                <p className="text-sm text-gray-600 mb-2">Status</p>
+                <StatusBadge status={selectedTruck.status} />
+              </div>
+
+              <div className="bg-gray-50 rounded-lg p-4">
+                <p className="text-sm text-gray-600 mb-2">Compartments ({selectedTruck.compartments?.length || 0})</p>
+                {selectedTruck.compartments && selectedTruck.compartments.length > 0 ? (
+                  <div className="space-y-2">
+                    {selectedTruck.compartments.map((comp: any) => (
+                      <div key={comp.id} className="flex items-center justify-between bg-white p-2 rounded">
+                        <span className="text-sm font-medium">Compartment {comp.id}</span>
+                        <span className="text-sm text-gray-600">{comp.capacity?.toLocaleString()}L • {comp.fuelType}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">No compartments configured</p>
+                )}
+              </div>
+
+              <div className="bg-gray-50 rounded-lg p-4">
+                <p className="text-sm text-gray-600 mb-2">Total Capacity</p>
+                <p className="text-2xl font-bold text-blue-600">{selectedTruck.capacity?.toLocaleString() || 0}L</p>
+              </div>
+
+              {selectedTruck.qrCode ? (
+                <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+                  <p className="text-sm text-green-800 font-medium mb-2">✓ QR Code Generated</p>
+                  {qrPreview ? (
+                    <img src={qrPreview} alt="Truck QR" className="w-48 h-48 mx-auto mt-3 border-2 border-green-300 rounded-lg bg-white" />
+                  ) : (
+                    <div className="w-48 h-48 mx-auto mt-3 flex items-center justify-center text-xs text-gray-400 border-2 border-dashed border-green-200 rounded-lg">
+                      Generating QR…
+                    </div>
+                  )}
+                  <p className="text-center text-xs text-gray-500 mt-2 font-mono">Encodes truck ID: {selectedTruck.id}</p>
+                  <button
+                    onClick={async () => { setQrBusy(true); try { await downloadTruckQrPdf(selectedTruck); } finally { setQrBusy(false); } }}
+                    disabled={qrBusy}
+                    className="mt-3 w-full bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg text-sm transition-colors"
+                  >
+                    {qrBusy ? 'Preparing PDF…' : '⬇️ Download QR (PDF)'}
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-orange-50 rounded-lg p-4 border border-orange-200">
+                  <p className="text-sm text-orange-800 font-medium mb-2">⏳ Approval Workflow Active</p>
+                  <p className="text-xs text-orange-700">
+                    Sensor integration request is under approval. QR code will be generated after final approval.
+                  </p>
+                </div>
+              )}
+
+              {/* Device Assignment History — time-versioned, not a single overwritable field (plan §1) */}
+              <div className="bg-white rounded-lg p-4 border border-gray-200 mt-4">
+                <p className="text-sm font-semibold text-gray-800 mb-2">Device Assignment History</p>
+                {getAssignmentHistory(selectedTruck.id).length === 0 ? (
+                  <p className="text-xs text-gray-400">No GPS/sensor device has been assigned to this truck yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {getAssignmentHistory(selectedTruck.id).map((a, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs bg-gray-50 rounded-lg px-3 py-2">
+                        <span className="font-mono text-gray-700">{a.deviceId}</span>
+                        <span className="text-gray-400">{a.kind}</span>
+                        <span className={`font-semibold ${a.validTo === null ? 'text-emerald-600' : 'text-gray-400'}`}>
+                          {new Date(a.validFrom).toLocaleString()} → {a.validTo ? new Date(a.validTo).toLocaleString() : 'current'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <button onClick={() => setShowModal(false)} className="w-full bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium py-3 rounded-lg">
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

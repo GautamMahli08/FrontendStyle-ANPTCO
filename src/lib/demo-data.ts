@@ -23,7 +23,7 @@ import { sendWebhook } from './webhooks';
 import { updateTripStatus as updateErpTripStatus } from './dispatch-client';
 
 // ── Demo version — bump this to force a full localStorage reset ──
-const DEMO_VERSION = 'v3.8';
+const DEMO_VERSION = 'v3.11';
 const VERSION_KEY  = 'fuel_demo_version';
 
 // Product mode is intentionally a standalone key (not in STORAGE_KEYS) so it
@@ -57,6 +57,7 @@ export interface FuelAnomaly {
   truckReg: string;
   compartment: string;
   fuelDropLiters: number;
+  fuelDropPercent?: number;
   location: string;
   detectedAt: Date;
   severity: 'HIGH' | 'MEDIUM' | 'LOW';
@@ -235,14 +236,14 @@ const DEMO_DRIVERS: Driver[] = [
   },
   {
     id: 'driver-xyz-1',
-    email: 'driver1@xyzpetroleum.com',
+    email: 'driver1@client1.com',
     password: 'driver123',
     firstName: 'Ahmed',
     lastName: 'Al-Balushi',
     phone: '+968 9555 1010',
     licenseNumber: 'DL-OM-101',
     tspId: 'xyz-petroleum',
-    tspName: 'XYZ Petroleum LLC',
+    tspName: 'Client 1',
     workspaceId: 'ws-xyz-petroleum',
     verified: true,
     assignedTruckId: 'truck-xyz-1',
@@ -251,14 +252,14 @@ const DEMO_DRIVERS: Driver[] = [
   },
   {
     id: 'driver-xyz-2',
-    email: 'driver2@xyzpetroleum.com',
+    email: 'driver2@client1.com',
     password: 'driver123',
     firstName: 'Salim',
     lastName: 'Al-Harthy',
     phone: '+968 9555 2020',
     licenseNumber: 'DL-OM-102',
     tspId: 'xyz-petroleum',
-    tspName: 'XYZ Petroleum LLC',
+    tspName: 'Client 1',
     workspaceId: 'ws-xyz-petroleum',
     verified: true,
     assignedTruckId: 'truck-xyz-2',
@@ -267,19 +268,51 @@ const DEMO_DRIVERS: Driver[] = [
   },
   {
     id: 'driver-xyz-3',
-    email: 'driver3@xyzpetroleum.com',
+    email: 'driver3@client1.com',
     password: 'driver123',
     firstName: 'Yousuf',
     lastName: 'Al-Rawahi',
     phone: '+968 9555 3030',
     licenseNumber: 'DL-OM-103',
     tspId: 'xyz-petroleum',
-    tspName: 'XYZ Petroleum LLC',
+    tspName: 'Client 1',
     workspaceId: 'ws-xyz-petroleum',
     verified: true,
     assignedTruckId: 'truck-xyz-3',
     currentStatus: 'AVAILABLE',
     createdAt: new Date('2026-02-01'),
+  },
+  {
+    id: 'driver-xyz2-1',
+    email: 'driver1@client2.com',
+    password: 'driver123',
+    firstName: 'Hamed',
+    lastName: 'Al-Kindi',
+    phone: '+968 9666 1010',
+    licenseNumber: 'DL-OM-201',
+    tspId: 'xyz-petroleum-2',
+    tspName: 'Client 2',
+    workspaceId: 'ws-xyz-petroleum-2',
+    verified: true,
+    assignedTruckId: 'truck-xyz2-1',
+    currentStatus: 'AVAILABLE',
+    createdAt: new Date('2026-02-10'),
+  },
+  {
+    id: 'driver-xyz2-2',
+    email: 'driver2@client2.com',
+    password: 'driver123',
+    firstName: 'Nasser',
+    lastName: 'Al-Amri',
+    phone: '+968 9666 2020',
+    licenseNumber: 'DL-OM-202',
+    tspId: 'xyz-petroleum-2',
+    tspName: 'Client 2',
+    workspaceId: 'ws-xyz-petroleum-2',
+    verified: true,
+    assignedTruckId: 'truck-xyz2-2',
+    currentStatus: 'AVAILABLE',
+    createdAt: new Date('2026-02-10'),
   },
 ];
 
@@ -298,11 +331,22 @@ const DEMO_WORKSPACES: Workspace[] = [
   // and account are isolated from the ws-anptco marketplace tenant.
   {
     id: 'ws-xyz-petroleum',
-    name: 'XYZ Petroleum LLC',
+    name: 'Client 1',
     slug: 'xyz-petroleum',
     type: 'TRANSPORT',
     ownerId: 'xyz-petroleum',
     createdAt: new Date('2026-02-01'),
+  },
+  // A second, independent Monitoring-Only tenant — dedicated to demoing the
+  // fuel-theft / unauthorized-activity → failed-delivery path, so the first
+  // XYZ Petroleum tenant can stay a clean, always-succeeds walkthrough.
+  {
+    id: 'ws-xyz-petroleum-2',
+    name: 'Client 2',
+    slug: 'xyz-petroleum-2',
+    type: 'TRANSPORT',
+    ownerId: 'xyz-petroleum-2',
+    createdAt: new Date('2026-02-10'),
   },
 ];
 
@@ -366,12 +410,22 @@ const DEMO_USERS: User[] = [
   // registered under ws-xyz-petroleum, not the ws-anptco marketplace tenant.
   {
     id: 'xyz-petroleum',
-    email: 'ops@xyzpetroleum.com',
-    firstName: 'XYZ',
-    lastName: 'Petroleum',
-    role: 'TRANSPORT_ADMIN',
+    email: 'ops@client1.com',
+    firstName: 'Client',
+    lastName: '1',
+    role: 'SELLER_MANAGER',
     workspaceId: 'ws-xyz-petroleum',
-    companyName: 'XYZ Petroleum LLC',
+    companyName: 'Client 1',
+    verified: true,
+  },
+  {
+    id: 'xyz-petroleum-2',
+    email: 'ops@client2.com',
+    firstName: 'Client',
+    lastName: '2',
+    role: 'SELLER_MANAGER',
+    workspaceId: 'ws-xyz-petroleum-2',
+    companyName: 'Client 2',
     verified: true,
   },
 ];
@@ -475,7 +529,7 @@ const DEMO_TRUCKS: Truck[] = [
     registrationNumber: 'TRK-101',
     assignedDriverId: 'driver-xyz-1',
     tspId: 'xyz-petroleum',
-    tspName: 'XYZ Petroleum LLC',
+    tspName: 'Client 1',
     workspaceId: 'ws-xyz-petroleum',
     compartments: makeStandardCompartments(),
     capacity: TRUCK_CAPACITY,
@@ -494,7 +548,7 @@ const DEMO_TRUCKS: Truck[] = [
     registrationNumber: 'TRK-102',
     assignedDriverId: 'driver-xyz-2',
     tspId: 'xyz-petroleum',
-    tspName: 'XYZ Petroleum LLC',
+    tspName: 'Client 1',
     workspaceId: 'ws-xyz-petroleum',
     compartments: makeStandardCompartments(),
     capacity: TRUCK_CAPACITY,
@@ -513,7 +567,7 @@ const DEMO_TRUCKS: Truck[] = [
     registrationNumber: 'TRK-103',
     assignedDriverId: 'driver-xyz-3',
     tspId: 'xyz-petroleum',
-    tspName: 'XYZ Petroleum LLC',
+    tspName: 'Client 1',
     workspaceId: 'ws-xyz-petroleum',
     compartments: makeStandardCompartments(),
     capacity: TRUCK_CAPACITY,
@@ -526,6 +580,45 @@ const DEMO_TRUCKS: Truck[] = [
     commercialApproval: true,
     safetyApproval: true,
     createdAt: new Date('2026-02-01'),
+  },
+  // XYZ Petroleum 2's own fleet — the theft/unauthorized-activity demo tenant.
+  {
+    id: 'truck-xyz2-1',
+    registrationNumber: 'TRK-201',
+    assignedDriverId: 'driver-xyz2-1',
+    tspId: 'xyz-petroleum-2',
+    tspName: 'Client 2',
+    workspaceId: 'ws-xyz-petroleum-2',
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
+    status: 'IDLE',
+    currentLat: 23.670250,
+    currentLng: 58.189120,
+    qrCode: 'QR-TRK-201',
+    galileoskyDeviceId: 'GSKY-XYZ2-201',
+    sensorConfigured: true,
+    commercialApproval: true,
+    safetyApproval: true,
+    createdAt: new Date('2026-02-10'),
+  },
+  {
+    id: 'truck-xyz2-2',
+    registrationNumber: 'TRK-202',
+    assignedDriverId: 'driver-xyz2-2',
+    tspId: 'xyz-petroleum-2',
+    tspName: 'Client 2',
+    workspaceId: 'ws-xyz-petroleum-2',
+    compartments: makeStandardCompartments(),
+    capacity: TRUCK_CAPACITY,
+    status: 'IDLE',
+    currentLat: 23.670250,
+    currentLng: 58.189120,
+    qrCode: 'QR-TRK-202',
+    galileoskyDeviceId: 'GSKY-XYZ2-202',
+    sensorConfigured: true,
+    commercialApproval: true,
+    safetyApproval: true,
+    createdAt: new Date('2026-02-10'),
   },
 ];
 
@@ -1155,6 +1248,13 @@ export function getGeofenceDebounceState(orderId: string): DebounceState {
   return readGeofenceDebounceMap()[orderId] ?? initialDebounceState();
 }
 
+// Tenants whose EN_ROUTE deliveries automatically run the theft pipeline
+// partway through the trip (see advanceJourneys below) — no manual "Report
+// unauthorized activity" click needed. XYZ Petroleum 2 exists specifically
+// to demo this failure mode reliably; XYZ Petroleum LLC (and every Full
+// Platform TSP) stays untouched, so it's still the clean always-succeeds walkthrough.
+const AUTO_THEFT_TENANTS = ['xyz-petroleum-2'];
+
 /**
  * Flip any EN_ROUTE order to ARRIVED once its truck has genuinely entered the
  * destination geofence — replacing the old flat "60s timer = arrived" stand-in.
@@ -1170,10 +1270,124 @@ export function advanceJourneys(): boolean {
 
   getOrders().forEach((o: any) => {
     if (o.status !== 'EN_ROUTE') return;
+    // No GPS signal, no position updates and no geofence progress — this is
+    // exactly what a real lost-signal truck looks like: the platform simply
+    // stops hearing from it until the signal (or the demo trigger) restores.
+    if (o.telemetryStatus === 'NO_SIGNAL') return;
 
     const truck = trucks.find(t => t.id === o.assignedTruckId);
     const t = journeyProgress(o);
     const dest = destinationCoords(o);
+
+    // Automatic theft demo — XYZ Petroleum 2 is the dedicated "things go
+    // wrong" tenant, so its deliveries fail on their own partway through the
+    // trip, no manual "Report unauthorized activity" click required. Staged,
+    // not instant: the truck visibly stops at a fixed off-route position,
+    // fuel drains down in view over real time (orderFuelPhase reads
+    // stoppedAt directly), and only once it's been stopped for
+    // STOP_ALERT_MS does the real pipeline evaluate the — by then genuinely
+    // recorded, not fabricated — declining stationary/off-geofence readings
+    // and raise the alert.
+    if (AUTO_THEFT_TENANTS.includes(o.assignedTSPId) && o.assignedTruckId) {
+      if (o.stoppedAt) {
+        const deviceId = truck?.galileoskyDeviceId ?? `IMEI-${o.assignedTruckId}`;
+        const elapsed = Date.now() - new Date(o.stoppedAt).getTime();
+        const { readings } = orderFuelTelemetry(o); // reflects the live drain via orderFuelPhase
+        ingestTelemetry({
+          truckId: o.assignedTruckId, deviceId,
+          lat: o.stoppedLat, lng: o.stoppedLng,
+          speed: 0, ignition: false, ts: Date.now(),
+          compartmentVolumes: readings.map(r => r.volume),
+        });
+
+        if (elapsed >= STOP_ALERT_MS) {
+          // Deliberately NOT evaluateTheftRisk here: that function looks for
+          // a high→low *transition* inside its last-5-readings window, which
+          // is exactly right for spotting a drop in an ambient stream. But by
+          // 30s stopped, the drain has long since plateaued at its floor
+          // (STOP_DRAIN_MS is 26s), so the last 5 readings are all flat and
+          // a transition-detector correctly (but unhelpfully) finds no
+          // change. This is a constructed, deterministic "stopped too long"
+          // scenario, not a noisy stream to search — compare the fill
+          // directly against the known full capacity instead.
+          const fullVolume = orderCompartmentPlan(o).reduce((s, c) => s + (c.fuelType ? c.capacity : 0), 0);
+          const currentVolume = orderFuelTelemetry(o).totalVolume;
+          const dropLiters = Math.max(0, fullVolume - currentVolume);
+          const dropPct = fullVolume > 0 ? (dropLiters / fullVolume) * 100 : 0;
+          const stoppedS = Math.round(elapsed / 1000);
+          const reasoning = `${dropLiters}L (${Math.round(dropPct)}%) drop while stopped · truck stationary with ignition off · outside any authorized geofence`;
+
+          if (dropLiters > fullVolume * THEFT_DROP_FRACTION) {
+            addFuelAnomaly({
+              id:             `anomaly-${Date.now()}`,
+              orderId:        o.id,
+              truckReg:       o.assignedTruckRegistration ?? 'TRK',
+              compartment:    'All compartments',
+              fuelDropLiters: Math.round(dropLiters),
+              fuelDropPercent: Math.round(dropPct),
+              location:       `Stopped ${stoppedS}s at an unauthorized location · ${reasoning}`,
+              detectedAt:     new Date(),
+              severity:       'HIGH',
+              status:         'OPEN',
+            });
+            if (o.assignedTSPId) {
+              addNotification({
+                id: `notif-theft-${Date.now()}`, userId: o.assignedTSPId,
+                type: 'FUEL_ANOMALY', title: '🚨 Fuel theft detected',
+                message: `${o.assignedTruckRegistration ?? 'Truck'} — ${Math.round(dropLiters)}L (${Math.round(dropPct)}%) drop while stopped outside any authorized geofence. Delivery #${shortOrderId(o.id)} aborted.`,
+                read: false, createdAt: new Date(),
+              });
+            }
+            updateOrder(o.id, {
+              status: 'DELIVERY_FAILED',
+              failedAt: new Date(),
+              failureReason: `Vehicle stopped at this position for more than ${Math.round(STOP_ALERT_MS / 1000)} seconds — ${reasoning}`,
+            });
+            updateTruck(o.assignedTruckId, { status: 'RETURNING' });
+            if (o.erpTripId) void updateErpTripStatus(o.erpTripId, 'CANCELLED');
+            void sendWebhook({
+              event: 'theft.alert',
+              trip_id: o.erpTripId ?? o.id,
+              erp_dispatch_no: o.erpDispatchNo ?? o.id,
+              occurred_at: new Date().toISOString(),
+              data: {
+                drop_liters: Math.round(dropLiters),
+                stopped_seconds: stoppedS,
+                reasoning,
+                driver: o.assignedDriverName,
+                driver_phone: o.assignedDriverPhone,
+              },
+            });
+            void sendWebhook({
+              event: 'trip.exception',
+              trip_id: o.erpTripId ?? o.id,
+              erp_dispatch_no: o.erpDispatchNo ?? o.id,
+              occurred_at: new Date().toISOString(),
+              data: { reason: 'unauthorized_activity', outcome: 'DELIVERY_FAILED' },
+            });
+          }
+        }
+        changed = true;
+        return; // stopped (draining or already failed) — skip normal driving logic below
+      }
+
+      if (t >= 0.3) {
+        // Cross the trigger point — the truck pulls off and stops right where
+        // it actually was on the route at this moment (small nudge off the
+        // road itself), not teleported off to a fixed offset from the
+        // destination — that could land far from the visible route, in a
+        // corner of the map nobody's looking at. Stopping mid-route reads
+        // immediately as "it was here, then it stopped here."
+        const roadRoute = getCachedRoadRoute(FIXED_DEPOT, dest);
+        const atStop = roadRoute
+          ? routePosition(roadRoute, t)
+          : { lat: FIXED_DEPOT.lat + (dest.lat - FIXED_DEPOT.lat) * t, lng: FIXED_DEPOT.lng + (dest.lng - FIXED_DEPOT.lng) * t };
+        const offRoute = { lat: atStop.lat + 0.01, lng: atStop.lng + 0.01 }; // ~1km off the road, still clearly on the route
+        updateOrder(o.id, { stoppedAt: new Date(), stoppedLat: offRoute.lat, stoppedLng: offRoute.lng });
+        changed = true;
+        return;
+      }
+    }
 
     // Follow the actual road geometry (same OSRM path the live map draws) once
     // it's fetched; a straight-line lerp is only the fallback for the first
@@ -1248,6 +1462,19 @@ export const TELEMETRY_INTERVAL_MS = 2_000;   // simulated flespi push cadence
 export const LOADING_DURATION_MS   = 8_000;   // depot fill time (compartments filling)
 export const OFFLOAD_DURATION_MS   = 10_000;  // station drain time (offloading)
 
+// An unauthorized-activity stop (see advanceJourneys' AUTO_THEFT_TENANTS):
+// fuel visibly drains down to STOP_DRAIN_FLOOR over STOP_DRAIN_MS — deliberately
+// longer than STOP_ALERT_MS so the tank is still smoothly, visibly emptying
+// (CompartmentFuel re-samples + CSS-animates every TELEMETRY_INTERVAL_MS) when
+// the alert fires at STOP_ALERT_MS, then keeps draining to the floor after —
+// not an instant jump straight to the floor value.
+export const STOP_DRAIN_MS    = 12_000;
+export const STOP_ALERT_MS    = 5_000;
+export const STOP_DRAIN_FLOOR = 0.25;
+// A drop has to clear this fraction of the truck's full loaded volume before
+// it's flagged as theft rather than normal sensor noise (plan §6).
+export const THEFT_DROP_FRACTION = 0.05;
+
 export type FuelPhase = 'EMPTY' | 'LOADING' | 'LOADED' | 'IN_TRANSIT' | 'OFFLOADING' | 'DELIVERED';
 
 export interface CompartmentReading {
@@ -1283,6 +1510,19 @@ export function orderCompartmentPlan(order: any): { index: number; fuelType: str
  */
 export function orderFuelPhase(order: any, now = Date.now()): { phase: FuelPhase; fill: number } {
   if (!order) return { phase: 'EMPTY', fill: 0 };
+
+  // Vehicle stopped at an unauthorized location — drain visibly toward
+  // STOP_DRAIN_FLOOR instead of sitting at a flat 100% while "in transit."
+  // Reuses the OFFLOADING phase visuals (amber, pulsing "Offloading" label),
+  // which reads correctly here too: fuel is leaving the tank right now.
+  // Stays frozen at the drained level after DELIVERY_FAILED so the bar
+  // doesn't snap back up or to empty the instant the status flips.
+  if (order.stoppedAt) {
+    const elapsed = now - new Date(order.stoppedAt).getTime();
+    const t = Math.max(0, Math.min(1, elapsed / STOP_DRAIN_MS));
+    const fill = 1 - t * (1 - STOP_DRAIN_FLOOR);
+    return { phase: 'OFFLOADING', fill };
+  }
 
   if (order.status === 'COMPLETED') {
     const start = order.completedAt ? new Date(order.completedAt).getTime() : 0;
@@ -1554,14 +1794,26 @@ export const DEMO_PERSONAS = [
   },
   {
     id: 'xyz-petroleum',
-    label: 'XYZ Petroleum',
-    name: 'XYZ Petroleum LLC',
-    email: 'ops@xyzpetroleum.com',
+    label: 'Client 1',
+    name: 'Client 1',
+    email: 'ops@client1.com',
     password: 'xyz123',
-    role: 'TRANSPORT_ADMIN' as const,
-    route: '/transport/dashboard',
+    role: 'SELLER_MANAGER' as const,
+    route: '/seller/dashboard',
     color: 'orange',
     icon: '🛢️',
     description: 'Monitoring-Only tenant — 2 trucks, own fleet',
+  },
+  {
+    id: 'xyz-petroleum-2',
+    label: 'Client 2',
+    name: 'Client 2',
+    email: 'ops@client2.com',
+    password: 'xyz123',
+    role: 'SELLER_MANAGER' as const,
+    route: '/seller/dashboard',
+    color: 'orange',
+    icon: '🚨',
+    description: 'Monitoring-Only tenant — theft & unauthorized activity demo',
   },
 ];

@@ -87,7 +87,7 @@ const PERSONA_ROWS_BY_MODE: Record<ProductMode, string[][]> = {
     ['tsp-001', 'tsp-002'],
   ],
   monitoring: [
-    ['xyz-petroleum'],
+    ['xyz-petroleum', 'xyz-petroleum-2'],
   ],
 };
 
@@ -306,7 +306,7 @@ export default function Home() {
               >
                 <div className="w-8 h-8 rounded-lg bg-slate-200 text-slate-600 flex items-center justify-center text-base flex-shrink-0">🏢</div>
                 <div className="flex-1 min-w-0">
-                  <span className="text-slate-700 font-semibold text-sm">XYZ Petroleum — ERP Dispatch Console</span>
+                  <span className="text-slate-700 font-semibold text-sm">ERP Dispatch Console</span>
                   <p className="text-slate-400 text-xs mt-0.5">Simulates the external company sending a dispatch across the boundary — not a platform role</p>
                 </div>
                 <svg className="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>

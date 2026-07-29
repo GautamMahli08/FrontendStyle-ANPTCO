@@ -52,7 +52,7 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
     advanceLoading();
     advanceJourneys();
     setOrders(getOrders().filter((o: any) => isSeller ? o.workspaceId === user.workspaceId : o.assignedTSPId === user.id));
-    setTrucks(getTrucks().filter((t: any) => isSeller ? true : t.tspId === user.id));
+    setTrucks(getTrucks().filter((t: any) => isSeller ? t.workspaceId === user.workspaceId : t.tspId === user.id));
     setAnomalies(getFuelAnomalies());
   }, [user, isSeller]);
 
@@ -91,7 +91,7 @@ export default function FleetMonitorView({ user, allowTruckFilter }: { user: any
   const hasFocus = !!(focusedOrder || focusedTruck);
 
   const myRegs = new Set(trucks.map(t => t.registrationNumber));
-  const visibleAnomalies = isSeller ? anomalies : anomalies.filter(a => myRegs.has(a.truckReg));
+  const visibleAnomalies = anomalies.filter(a => myRegs.has(a.truckReg));
   const openAnomalies = visibleAnomalies.filter(a => a.status !== 'RESOLVED');
 
   // ── Searchable items for the current filter ──────────────────

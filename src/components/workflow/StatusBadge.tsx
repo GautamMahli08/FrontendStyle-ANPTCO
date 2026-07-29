@@ -116,6 +116,24 @@ color:
 
 },
 
+DELIVERY_FAILED:{
+
+label:'🚨 Failed — Unauthorized Activity',
+
+color:
+'bg-red-100 text-red-800',
+
+},
+
+TRIP_EXCEPTION:{
+
+label:'🚪 Exception — Left Without Confirming',
+
+color:
+'bg-orange-100 text-orange-800',
+
+},
+
 OFFLOADING_IN_PROGRESS:{
 
 label:'⬇️ Offloading',

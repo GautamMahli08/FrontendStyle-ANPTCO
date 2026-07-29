@@ -343,6 +343,38 @@ function StationDeliveryPage() {
     );
   }
 
+  if (order.status === 'DELIVERY_FAILED') {
+    return (
+      <StationShell onBack={() => router.push('/xyz-company/dashboard')}>
+        <div className="bg-white border-2 border-red-200 rounded-2xl p-12 text-center shadow-sm">
+          <p className="text-4xl mb-3">🚨</p>
+          <p className="font-bold text-red-800 mb-1">Delivery Failed — Unauthorized Activity</p>
+          <p className="text-sm text-gray-500">
+            Order #{shortOrderId(order.id)} was aborted before reaching confirmation.
+            {order.failureReason ? ` ${order.failureReason}` : ''}
+          </p>
+          <p className="text-xs text-gray-400 mt-3">There is nothing to scan — this trip was flagged and stopped in transit.</p>
+        </div>
+      </StationShell>
+    );
+  }
+
+  if (order.status === 'TRIP_EXCEPTION') {
+    return (
+      <StationShell onBack={() => router.push('/xyz-company/dashboard')}>
+        <div className="bg-white border-2 border-orange-200 rounded-2xl p-12 text-center shadow-sm">
+          <p className="text-4xl mb-3">🚪</p>
+          <p className="font-bold text-orange-800 mb-1">Trip Exception — Left Without Confirming</p>
+          <p className="text-sm text-gray-500">
+            Order #{shortOrderId(order.id)} arrived, but the truck left the destination geofence before this delivery was confirmed.
+            {order.exceptionReason ? ` ${order.exceptionReason}` : ''}
+          </p>
+          <p className="text-xs text-gray-400 mt-3">There is nothing to scan — the delivery window closed unconfirmed.</p>
+        </div>
+      </StationShell>
+    );
+  }
+
   if (order.status !== 'ARRIVED') {
     return (
       <StationShell onBack={() => router.push('/xyz-company/dashboard')}>

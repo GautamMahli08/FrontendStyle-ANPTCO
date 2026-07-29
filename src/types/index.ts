@@ -24,6 +24,8 @@ export type OrderStatus =
   | 'ARRIVED'
   | 'DELIVERY_ACCEPTED'
   | 'DELIVERY_REJECTED'
+  | 'DELIVERY_FAILED'
+  | 'TRIP_EXCEPTION'
   | 'OFFLOADING_IN_PROGRESS'
   | 'OFFLOADING_COMPLETE'
   | 'COMPLETED'
@@ -269,6 +271,15 @@ export interface Order {
   erpDispatchNo?:   string;
   erpTripId?:       string;
   geofenceRadiusM?: number;
+  failedAt?:        Date;
+  failureReason?:   string;
+  exceptionAt?:     Date;
+  exceptionReason?: string;
+  telemetryStatus?: 'OK' | 'NO_SIGNAL';
+  noSignalSince?:   Date;
+  stoppedAt?:       Date;
+  stoppedLat?:      number;
+  stoppedLng?:      number;
   deliveryConfirmation?: {
     confirmedAt: string;
     scannerLat: number | null;

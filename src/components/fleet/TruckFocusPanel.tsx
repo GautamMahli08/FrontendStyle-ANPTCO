@@ -1,26 +1,23 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import CompartmentFuel from '@/src/components/fleet/CompartmentFuel';
 import OrderTimeline from '@/src/components/orders/OrderTimeline';
 import CopyId from '@/src/components/ui/CopyId';
 import {
   destinationCoords, FIXED_DEPOT, JOURNEY_DURATION_MS, shortOrderId,
-  destinationGeofenceRadiusM, getGeofenceDebounceState,
+  destinationGeofenceRadiusM, getGeofenceDebounceState, getFuelAnomalies, updateFuelAnomaly,
+  STOP_ALERT_MS,
 } from '@/src/lib/demo-data';
 import { GEOFENCE_DEBOUNCE_TICKS } from '@/src/lib/geo';
-import { getCachedRoadRoute } from '@/src/lib/route-geometry';
-import { getHistory } from '@/src/lib/telemetry-store';
+import { getLiveState } from '@/src/lib/telemetry-store';
 import DeliveryQrPanel from '@/src/components/qr/DeliveryQrPanel';
 
 // Leaflet touches `window`, so load the map only on the client.
 const LiveTrackingMap = dynamic(() => import('@/src/components/maps/LiveTrackingMap'), {
   ssr: false,
   loading: () => <div className="w-full h-[560px] flex items-center justify-center text-sm text-gray-400">Loading map…</div>,
-});
-const RouteReplayMap = dynamic(() => import('@/src/components/fleet/RouteReplayMap'), {
-  ssr: false,
-  loading: () => <div className="w-full h-[220px] flex items-center justify-center text-sm text-gray-400">Loading route…</div>,
 });
 
 const STATUS_BADGE: Record<string, string> = {
@@ -31,6 +28,14 @@ const STATUS_BADGE: Record<string, string> = {
   EN_ROUTE:  'bg-blue-100    text-blue-700',
   ARRIVED:   'bg-teal-100    text-teal-700',
   COMPLETED: 'bg-emerald-100 text-emerald-700',
+  DELIVERY_FAILED: 'bg-red-100 text-red-700',
+  TRIP_EXCEPTION:  'bg-orange-100 text-orange-700',
+};
+
+const ANOMALY_STATUS_STYLE: Record<string, string> = {
+  OPEN:      'bg-red-500     text-white',
+  REVIEWING: 'bg-yellow-500  text-white',
+  RESOLVED:  'bg-emerald-500 text-white',
 };
 
 /**
@@ -42,7 +47,35 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
   const reg    = truck?.registrationNumber ?? order?.assignedTruckRegistration ?? 'Truck';
   const driver = order?.assignedDriverName ?? '—';
   const status = order?.status ?? truck?.status ?? 'IDLE';
-  const moving = order && ['EN_ROUTE', 'ARRIVED'].includes(order.status);
+  const noSignal = order?.telemetryStatus === 'NO_SIGNAL';
+
+  // A 1s local clock so "stopped Ns ago" counts up smoothly between the
+  // ~3s backend polls, instead of jumping in visible steps.
+  const [liveNow, setLiveNow] = useState(() => Date.now());
+  useEffect(() => {
+    const iv = setInterval(() => setLiveNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const stoppedElapsedMs = order?.stoppedAt ? liveNow - new Date(order.stoppedAt).getTime() : null;
+  const stoppedTooLong = stoppedElapsedMs !== null && stoppedElapsedMs >= STOP_ALERT_MS;
+  // Still stopped and not yet failed by the backend — the live client clock
+  // can cross the 30s mark a moment before the next ~3s poll confirms it.
+  const stoppedActive = order?.stoppedAt && order.status === 'EN_ROUTE';
+
+  const lastFix = truck && noSignal ? getLiveState(truck.id) : undefined;
+
+  // Alerts get their own section below (banners), not the map — the map
+  // keeps showing the same depot/destination/route context throughout, with
+  // the truck marker frozen at its actual last-known/stopped point instead
+  // of the road interpolation continuing to (mis)animate it once we've lost
+  // track of where it really is.
+  const frozenPosition = order?.stoppedAt
+    ? { lat: order.stoppedLat, lng: order.stoppedLng }
+    : noSignal && lastFix
+    ? { lat: lastFix.lat, lng: lastFix.lng }
+    : undefined;
+  const moving = order && ['EN_ROUTE', 'ARRIVED'].includes(order.status) && (!noSignal || !!lastFix);
 
   const journeys = moving
     ? [{
@@ -53,6 +86,7 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
         dest:       (() => { const d = destinationCoords(order); return { lat: d.lat, lng: d.lng, name: order.destinationName || 'Destination' }; })(),
         startedAt:  order.tripStartedAt ? new Date(order.tripStartedAt).getTime() : Date.now(),
         durationMs: JOURNEY_DURATION_MS,
+        frozenPosition,
       }]
     : [];
 
@@ -63,8 +97,33 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
     if (status === 'LOADING')          return { icon: '🛢️', title: 'At depot', sub: 'Loading fuel into compartments' };
     if (status === 'LOADED')           return { icon: '🛢️', title: 'At depot', sub: 'Loaded — ready to depart' };
     if (status === 'COMPLETED')        return { icon: '✅', title: `Delivered at ${order.destinationName ?? 'station'}`, sub: 'Offloading complete' };
+    if (status === 'DELIVERY_FAILED')  return { icon: '🚨', title: 'Delivery failed', sub: 'Unauthorized activity detected — trip aborted' };
+    if (status === 'TRIP_EXCEPTION')   return { icon: '🚪', title: 'Trip exception', sub: 'Left the destination geofence without confirming delivery' };
+    // stoppedActive and "no signal with a last fix" both keep the map itself
+    // rendering (frozen marker via frozenPosition) instead of landing here —
+    // this only covers the edge case of no signal with no position ever recorded.
+    if (noSignal)                      return {
+      icon: '📡',
+      title: 'No GPS signal',
+      sub: 'No position ever recorded for this trip',
+    };
     return { icon: '🗺️', title: 'Not tracking', sub: '' };
   })();
+
+  const anomaly = order?.status === 'DELIVERY_FAILED'
+    ? getFuelAnomalies().filter(a => a.orderId === order.id).sort((a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime())[0]
+    : null;
+
+  // Optimistic override so Review/Resolve feels instant instead of waiting
+  // for the parent's ~3s poll to re-fetch the anomaly from storage.
+  const [ackOverride, setAckOverride] = useState<{ id: string; status: string } | null>(null);
+  useEffect(() => { setAckOverride(null); }, [anomaly?.id]);
+  const anomalyStatus = anomaly && ackOverride?.id === anomaly.id ? ackOverride.status : anomaly?.status;
+  const acknowledge = (nextStatus: 'REVIEWING' | 'RESOLVED') => {
+    if (!anomaly) return;
+    updateFuelAnomaly(anomaly.id, { status: nextStatus });
+    setAckOverride({ id: anomaly.id, status: nextStatus });
+  };
 
   return (
     <div className="space-y-3">
@@ -90,9 +149,119 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
         )}
       </div>
 
+      {/* Unauthorized-activity alert — the trip was failed, not just flagged */}
+      {order?.status === 'DELIVERY_FAILED' && (
+        <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🚨</span>
+              <p className="font-bold text-red-800 text-sm">Fuel theft detected — delivery aborted</p>
+            </div>
+            {anomaly && (
+              <span className="text-[10px] font-black text-white bg-red-600 px-2 py-0.5 rounded-full flex-shrink-0">{anomaly.severity}</span>
+            )}
+          </div>
+
+          {anomaly && (
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="bg-white/60 rounded-lg px-2 py-2 text-center">
+                <p className="text-base font-black text-red-700">
+                  {anomaly.fuelDropPercent != null ? `−${anomaly.fuelDropPercent}%` : `−${anomaly.fuelDropLiters.toLocaleString()}L`}
+                </p>
+                <p className="text-[10px] text-red-600">decrease from total</p>
+              </div>
+              <div className="bg-white/60 rounded-lg px-2 py-2 text-center">
+                <p className="text-base font-black text-red-700">&gt;{Math.round(STOP_ALERT_MS / 1000)}s</p>
+                <p className="text-[10px] text-red-600">stopped, ignition off</p>
+              </div>
+              <div className="bg-white/60 rounded-lg px-2 py-2 text-center">
+                <p className="text-base font-black text-red-700">{new Date(anomaly.detectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                <p className="text-[10px] text-red-600">detected</p>
+              </div>
+            </div>
+          )}
+
+          <p className="text-xs text-red-700">Outside any authorized geofence — trip aborted automatically.</p>
+
+          {anomaly && (
+            <div className="flex items-center justify-between gap-3 mt-3">
+              <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${ANOMALY_STATUS_STYLE[anomalyStatus ?? 'OPEN']}`}>
+                {anomalyStatus}
+              </span>
+              {anomalyStatus === 'OPEN' && (
+                <button
+                  onClick={() => acknowledge('REVIEWING')}
+                  className="text-xs font-bold text-gray-800 bg-white hover:bg-gray-50 border border-black/10 px-3 py-1.5 rounded-lg shadow-sm transition"
+                >
+                  Mark as Reviewing
+                </button>
+              )}
+              {anomalyStatus === 'REVIEWING' && (
+                <button
+                  onClick={() => acknowledge('RESOLVED')}
+                  className="text-xs font-bold text-gray-800 bg-white hover:bg-gray-50 border border-black/10 px-3 py-1.5 rounded-lg shadow-sm transition"
+                >
+                  Mark Resolved
+                </button>
+              )}
+            </div>
+          )}
+
+          <DriverContactStrip name={order.assignedDriverName} phone={order.assignedDriverPhone} />
+        </div>
+      )}
+
+      {/* Vehicle stopped — live countdown while under the alert threshold,
+          escalates to a red alert once stopped too long (plan-adjacent: this
+          is what triggers the automatic theft evaluation below). */}
+      {stoppedActive && (
+        <div className={`border-2 rounded-xl p-4 ${stoppedTooLong ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-lg">{stoppedTooLong ? '🚨' : '🛑'}</span>
+            <p className={`font-bold text-sm ${stoppedTooLong ? 'text-red-800' : 'text-amber-800'}`}>
+              {stoppedTooLong
+                ? `Vehicle stopped at this position for more than ${Math.round(STOP_ALERT_MS / 1000)} seconds`
+                : 'Vehicle stopped — monitoring'}
+            </p>
+          </div>
+          <p className={`text-xs ${stoppedTooLong ? 'text-red-700' : 'text-amber-700'}`}>
+            Stationary for {Math.max(0, Math.floor((stoppedElapsedMs ?? 0) / 1000))}s, engine off, outside any authorized geofence.
+            {stoppedTooLong ? ' Evaluating for unauthorized activity…' : ` Alert fires at ${Math.round(STOP_ALERT_MS / 1000)}s if it doesn't move.`}
+          </p>
+          <DriverContactStrip name={order.assignedDriverName} phone={order.assignedDriverPhone} />
+        </div>
+      )}
+
+      {/* Trip exception — reached the destination but left again unconfirmed */}
+      {order?.status === 'TRIP_EXCEPTION' && (
+        <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-lg">🚪</span>
+            <p className="font-bold text-orange-800 text-sm">Trip exception — left without confirming</p>
+          </div>
+          {order.exceptionReason && <p className="text-xs text-orange-700">{order.exceptionReason}</p>}
+          <DriverContactStrip name={order.assignedDriverName} phone={order.assignedDriverPhone} />
+        </div>
+      )}
+
+      {/* No GPS signal — position/geofence tracking is frozen, not just stale */}
+      {noSignal && (
+        <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-lg">📡</span>
+            <p className="font-bold text-orange-800 text-sm">No GPS signal — tracking paused</p>
+          </div>
+          <p className="text-xs text-orange-700">
+            Device went offline{order.noSignalSince ? ` at ${new Date(order.noSignalSince).toLocaleTimeString()}` : ''} — position and geofence checks are frozen until signal returns.
+          </p>
+          <DriverContactStrip name={order?.assignedDriverName} phone={order?.assignedDriverPhone} />
+        </div>
+      )}
+
       {/* Geofence debounce readout — real haversine distance + N-consecutive-fix
-          debounce (plan §7), not a flat timer. Only meaningful while en route. */}
-      {order?.status === 'EN_ROUTE' && (() => {
+          debounce (plan §7), not a flat timer. Only meaningful while en route
+          with a live signal — frozen/absent otherwise, same as position. */}
+      {order?.status === 'EN_ROUTE' && !noSignal && !order?.stoppedAt && (() => {
         const debounce = getGeofenceDebounceState(order.id);
         const insideCount = debounce.side === 'INSIDE' ? GEOFENCE_DEBOUNCE_TICKS : debounce.pendingSide === 'INSIDE' ? debounce.pendingCount : 0;
         return (
@@ -106,18 +275,6 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
       {/* Signed delivery QR — rotates on a timer, bound to this trip (plan §8) */}
       {order && ['EN_ROUTE', 'ARRIVED'].includes(order.status) && (
         <DeliveryQrPanel tripId={order.id} />
-      )}
-
-      {/* Route replay — drawn from real recorded telemetry_history (plan §5), not the live interpolation above */}
-      {order && truck && ['ARRIVED', 'COMPLETED'].includes(order.status) && (
-        <div className="rounded-xl overflow-hidden border border-gray-200">
-          <p className="text-xs font-bold text-gray-400 uppercase tracking-wide px-4 pt-3">Route Replay (recorded telemetry)</p>
-          <RouteReplayMap
-            points={getHistory(truck.id).map(p => ({ lat: p.lat, lng: p.lng }))}
-            roadRoute={getCachedRoadRoute(FIXED_DEPOT, destinationCoords(order))}
-            className="w-full h-[220px]"
-          />
-        </div>
       )}
 
       {/* Compact compartment fuel */}
@@ -152,6 +309,12 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
                 <dt className="text-gray-400 w-24 flex-shrink-0">Client</dt>
                 <dd className="font-semibold text-gray-900 truncate">{order.clientName ?? '—'}</dd>
               </div>
+              {order.erpDispatchNo && (
+                <div className="flex items-start gap-3">
+                  <dt className="text-gray-400 w-24 flex-shrink-0">Order Ref</dt>
+                  <dd className="font-mono text-gray-900 truncate">{order.erpDispatchNo}</dd>
+                </div>
+              )}
             </dl>
           </div>
 
@@ -163,6 +326,32 @@ export default function TruckFocusPanel({ order, truck }: { order: any; truck?: 
             <OrderTimeline order={order} showHeader={false} />
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// Every alert state (theft, stopped-too-long, exception, no-signal) ends the
+// same way in real life: someone has to call the driver. Surfacing the name
+// + a tap-to-dial number right on the alert saves a trip to Delivery Details.
+function DriverContactStrip({ name, phone }: { name?: string; phone?: string }) {
+  if (!name && !phone) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 mt-3 pt-3 border-t border-black/10">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="w-7 h-7 rounded-full bg-white/70 flex items-center justify-center text-sm flex-shrink-0">👤</span>
+        <div className="min-w-0">
+          <p className="text-xs font-bold text-gray-800 truncate">{name ?? 'Driver'}</p>
+          {phone && <p className="text-[11px] text-gray-500 truncate">{phone}</p>}
+        </div>
+      </div>
+      {phone && (
+        <a
+          href={`tel:${phone}`}
+          className="flex-shrink-0 flex items-center gap-1.5 text-xs font-bold text-gray-800 bg-white hover:bg-gray-50 border border-black/10 px-3 py-1.5 rounded-lg shadow-sm transition"
+        >
+          📞 Call driver
+        </a>
       )}
     </div>
   );

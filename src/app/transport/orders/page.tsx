@@ -29,6 +29,8 @@ const STATUS_LABEL: Record<string, string> = {
   ARRIVED:         'Arrived',
   COMPLETED:       'Delivered',
   CANCELLED:       'Cancelled',
+  DELIVERY_FAILED: 'Failed — Unauthorized Activity',
+  TRIP_EXCEPTION:  'Exception — Left Unconfirmed',
 };
 const STATUS_COLOR: Record<string, string> = {
   ASSIGNED_TO_TSP: 'bg-yellow-100 text-yellow-700',
@@ -39,6 +41,8 @@ const STATUS_COLOR: Record<string, string> = {
   ARRIVED:         'bg-teal-100   text-teal-700',
   COMPLETED:       'bg-emerald-100 text-emerald-700',
   CANCELLED:       'bg-red-100    text-red-700',
+  DELIVERY_FAILED: 'bg-red-100    text-red-700',
+  TRIP_EXCEPTION:  'bg-orange-100 text-orange-700',
 };
 
 function fuelSummary(order: any): string {
@@ -211,13 +215,27 @@ export default function TransportOrdersPage() {
     const baseline = orderFuelTelemetry(order).totalVolume;
     const now = Date.now();
 
-    // Two consecutive readings at the dropped level (not just one) so the
-    // pipeline's moving-median smoothing — which exists precisely to reject a
-    // single noisy blip — reflects a genuine sustained drop instead of
-    // averaging it away against the truck's recent high baseline readings.
+    // Inject a full 5-point window (3 baseline + 2 dropped) rather than relying
+    // on ambient advanceJourneys() ticks to have already built a "before"
+    // history — clicking this soon after journey start (before any ambient
+    // tick fires) previously left the pipeline with nothing to compare the
+    // drop against, so it correctly reported "no drop." Millisecond (not
+    // multi-second) spacing matters too: with a multi-second spread, a real
+    // ambient tick could land in between and dilute the pattern; packed to
+    // the current instant, nothing else can be interleaved. Two (not one)
+    // dropped readings at the tail also matter: the moving-median smoothing
+    // exists precisely to reject a single noisy blip, so a lone low reading
+    // gets averaged away against the high baseline.
     const droppedVolume = Math.max(0, baseline - 320);
-    ingestTelemetry({ truckId: order.assignedTruckId, deviceId, lat: offRoute.lat, lng: offRoute.lng, speed: 0, ignition: false, ts: now - 4000, compartmentVolumes: [droppedVolume] });
-    ingestTelemetry({ truckId: order.assignedTruckId, deviceId, lat: offRoute.lat, lng: offRoute.lng, speed: 0, ignition: false, ts: now, compartmentVolumes: [droppedVolume] });
+    const point = (ts: number, volume: number) => ({
+      truckId: order.assignedTruckId, deviceId, lat: offRoute.lat, lng: offRoute.lng,
+      speed: 0, ignition: false, ts, compartmentVolumes: [volume],
+    });
+    ingestTelemetry(point(now - 4, baseline));
+    ingestTelemetry(point(now - 3, baseline));
+    ingestTelemetry(point(now - 2, baseline));
+    ingestTelemetry(point(now - 1, droppedVolume));
+    ingestTelemetry(point(now, droppedVolume));
 
     const evaluation = evaluateTheftRisk(getHistory(order.assignedTruckId).slice(-5), {
       depot: { center: FIXED_DEPOT, radiusM: FIXED_DEPOT.geofenceRadius },
@@ -257,6 +275,44 @@ export default function TransportOrdersPage() {
         driver: order.assignedDriverName,
         driver_phone: order.assignedDriverPhone,
       },
+    });
+    loadData(user);
+  };
+
+  // Plan §3's dispatch edge case: "GPS device offline → accept the trip, flag
+  // telemetry_status: NO_SIGNAL, alert." advanceJourneys() stops updating
+  // this order's position/geofence entirely while flagged.
+  const simulateNoSignal = async (order: any) => {
+    updateOrder(order.id, { telemetryStatus: 'NO_SIGNAL', noSignalSince: new Date() });
+    await sendWebhook({
+      event: 'telemetry.no_signal',
+      trip_id: order.erpTripId ?? order.id,
+      erp_dispatch_no: order.erpDispatchNo ?? order.id,
+      occurred_at: new Date().toISOString(),
+      data: { truck_ref: order.assignedTruckRegistration, reason: 'gps_device_offline' },
+    });
+    loadData(user);
+  };
+
+  const restoreSignal = (order: any) => {
+    updateOrder(order.id, { telemetryStatus: 'OK', noSignalSince: undefined });
+    loadData(user);
+  };
+
+  // Plan's trip state machine: "exit geofence w/o QR = EXCEPTION" — the truck
+  // reached the destination but left again before delivery was confirmed.
+  const simulateLeftWithoutConfirming = async (order: any) => {
+    const reason = `${order.assignedTruckRegistration ?? 'Truck'} left the destination geofence before the delivery QR was scanned — delivery not confirmed.`;
+    updateOrder(order.id, { status: 'TRIP_EXCEPTION', exceptionAt: new Date(), exceptionReason: reason });
+    if (order.assignedTruckId) updateTruck(order.assignedTruckId, { status: 'RETURNING' });
+
+    if (order.erpTripId) await updateErpTripStatus(order.erpTripId, 'CANCELLED');
+    await sendWebhook({
+      event: 'trip.exception',
+      trip_id: order.erpTripId ?? order.id,
+      erp_dispatch_no: order.erpDispatchNo ?? order.id,
+      occurred_at: new Date().toISOString(),
+      data: { reason: 'left_geofence_without_confirmation', outcome: 'TRIP_EXCEPTION' },
     });
     loadData(user);
   };
@@ -319,6 +375,7 @@ export default function TransportOrdersPage() {
                   const isOpen = detailId === order.id;
                   const truck  = trucks.find(t => t.id === order.assignedTruckId);
                   const theft  = anomalies.some(a => a.orderId === order.id && a.status !== 'RESOLVED');
+                  const noSignal = order.telemetryStatus === 'NO_SIGNAL';
                   return (
                     <div key={order.id}>
                       {/* Summary row */}
@@ -382,13 +439,39 @@ export default function TransportOrdersPage() {
                                 {order.status === 'COMPLETED' ? 'View' : 'Track'}
                               </button>
                             )}
-                            {order.status === 'EN_ROUTE' && !theft && (
+                            {order.status === 'EN_ROUTE' && !theft && !noSignal && (
                               <button
                                 onClick={() => handleSimulateTheft(order)}
                                 title="Injects a real stationary, off-geofence fuel-drop reading and runs the theft pipeline against it"
                                 className="text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-lg transition"
                               >
                                 Simulate off-route stop
+                              </button>
+                            )}
+                            {order.status === 'EN_ROUTE' && !noSignal && (
+                              <button
+                                onClick={() => simulateNoSignal(order)}
+                                title="GPS device goes offline mid-trip — position/geofence tracking freezes until signal is restored"
+                                className="text-xs font-bold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-3 py-1.5 rounded-lg transition"
+                              >
+                                Simulate GPS signal loss
+                              </button>
+                            )}
+                            {order.status === 'EN_ROUTE' && noSignal && (
+                              <button
+                                onClick={() => restoreSignal(order)}
+                                className="text-xs font-bold text-white bg-orange-600 hover:bg-orange-700 px-3 py-1.5 rounded-lg transition"
+                              >
+                                Restore signal
+                              </button>
+                            )}
+                            {order.status === 'ARRIVED' && (
+                              <button
+                                onClick={() => simulateLeftWithoutConfirming(order)}
+                                title="Truck leaves the destination geofence before the delivery QR is scanned"
+                                className="text-xs font-bold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-3 py-1.5 rounded-lg transition"
+                              >
+                                Simulate left without confirming
                               </button>
                             )}
                             {order.status === 'CANCELLED' && <span className="text-xs text-gray-400">—</span>}

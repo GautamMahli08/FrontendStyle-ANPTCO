@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
-import { getCurrentUser, getOrders, getKYCDocuments, getFuelAnomalies, shortOrderId } from '@/src/lib/demo-data';
+import { getCurrentUser, getOrders, getKYCDocuments, getFuelAnomalies, shortOrderId, getProductMode, getModules } from '@/src/lib/demo-data';
 
 const STATUS_COLOR: Record<string, string> = {
   PLACED:             'bg-yellow-100 text-yellow-700',
@@ -24,6 +24,7 @@ export default function SellerDashboard() {
   const [kycDocs,   setKycDocs]   = useState<any[]>([]);
   const [anomalies, setAnomalies] = useState<any[]>([]);
   const [mounted,   setMounted]   = useState(false);
+  const [mode,      setMode]      = useState<'full' | 'monitoring'>('full');
 
   const load = useCallback((u: any) => {
     setOrders(getOrders().filter((o: any) => o.workspaceId === u.workspaceId));
@@ -36,6 +37,7 @@ export default function SellerDashboard() {
     const u = getCurrentUser();
     if (!u || u.role !== 'SELLER_MANAGER') { router.push('/'); return; }
     setUser(u);
+    setMode(getProductMode());
     load(u);
     const iv = setInterval(() => load(u), 3000);
     return () => clearInterval(iv);
@@ -43,12 +45,15 @@ export default function SellerDashboard() {
 
   if (!mounted || !user) return null;
 
+  const modules        = getModules(mode);
+  const isMonitoring    = mode === 'monitoring';
   const pending        = orders.filter(o => o.status === 'PLACED');
   const awaitingTSP    = orders.filter(o => o.status === 'ACCEPTED_BY_SELLER');
   const active         = orders.filter(o => ['ASSIGNED_TO_TSP', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED'].includes(o.status));
   const completed      = orders.filter(o => o.status === 'COMPLETED');
-  const pendingKYC     = kycDocs.filter(k => k.reviewStatus === 'PENDING' && k.sellerCode === user.sellerCode);
+  const pendingKYC     = modules.ordering ? kycDocs.filter(k => k.reviewStatus === 'PENDING' && k.sellerCode === user.sellerCode) : [];
   const openAlerts     = anomalies.filter(a => a.status !== 'RESOLVED');
+  const manageOrdersHref = isMonitoring ? '/seller/order-history' : '/seller/orders';
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -62,9 +67,13 @@ export default function SellerDashboard() {
           {/* Page header */}
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-0.5">Seller Portal · ANPTCO</p>
+              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-0.5">
+                {isMonitoring ? 'Monitoring Portal' : 'Seller Portal'} · {user.companyName ?? 'ANPTCO'}
+              </p>
               <h1 className="text-2xl font-black text-gray-900">{user.firstName} {user.lastName}</h1>
-              <p className="text-sm text-gray-500 mt-0.5">Review orders, manage KYC and monitor your fleet</p>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {isMonitoring ? 'Monitor your fleet and delivery activity in real time' : 'Review orders, manage KYC and monitor your fleet'}
+              </p>
             </div>
             <div className="hidden md:flex items-center gap-3">
               <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 text-center shadow-sm">
@@ -97,8 +106,8 @@ export default function SellerDashboard() {
             </div>
           )}
 
-          {/* Pending orders banner */}
-          {pending.length > 0 && (
+          {/* Pending orders banner — marketplace accept/assign flow only */}
+          {modules.ordering && pending.length > 0 && (
             <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-5 flex items-start gap-4">
               <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center text-xl flex-shrink-0">📦</div>
               <div className="flex-1">
@@ -116,12 +125,16 @@ export default function SellerDashboard() {
             </div>
           )}
 
-          {/* KPIs */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <Kpi label="Pending Review"    value={pending.length}     color="amber"   badge={pending.length > 0}     onClick={() => router.push('/seller/orders')} />
-            <Kpi label="Awaiting TSP"      value={awaitingTSP.length} color="purple"  badge={awaitingTSP.length > 0} onClick={() => router.push('/seller/orders')} />
-            <Kpi label="Active Deliveries" value={active.length}      color="blue"    onClick={() => router.push('/seller/orders')} />
-            <Kpi label="Completed"         value={completed.length}   color="green" />
+          {/* KPIs — the accept/assign steps only exist in the marketplace flow */}
+          <div className={`grid grid-cols-2 ${modules.ordering ? 'lg:grid-cols-4' : ''} gap-4`}>
+            {modules.ordering && (
+              <>
+                <Kpi label="Pending Review"    value={pending.length}     color="amber"   badge={pending.length > 0}     onClick={() => router.push('/seller/orders')} />
+                <Kpi label="Awaiting TSP"      value={awaitingTSP.length} color="purple"  badge={awaitingTSP.length > 0} onClick={() => router.push('/seller/orders')} />
+              </>
+            )}
+            <Kpi label="Active Deliveries" value={active.length}      color="blue"    onClick={() => router.push('/seller/fleet-monitor')} />
+            <Kpi label="Completed"         value={completed.length}   color="green"   onClick={() => router.push(manageOrdersHref)} />
           </div>
 
           {/* Two-column: Recent Orders + Quick Actions */}
@@ -131,8 +144,8 @@ export default function SellerDashboard() {
             <div className="lg:col-span-2 bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                 <h2 className="font-bold text-gray-900 text-sm">Recent Orders</h2>
-                <button onClick={() => router.push('/seller/orders')} className="text-xs text-blue-600 hover:text-blue-700 font-semibold transition">
-                  Manage All
+                <button onClick={() => router.push(manageOrdersHref)} className="text-xs text-blue-600 hover:text-blue-700 font-semibold transition">
+                  {isMonitoring ? 'View History' : 'Manage All'}
                 </button>
               </div>
               <div className="divide-y divide-gray-50">
@@ -172,27 +185,31 @@ export default function SellerDashboard() {
 
               <div className="divide-y divide-gray-50">
 
-                {/* Step 1 — Review new orders */}
-                <ActionItem
-                  step={1}
-                  title={pending.length > 0 ? `${pending.length} order${pending.length > 1 ? 's' : ''} waiting for review` : 'No new orders'}
-                  desc="Accept or decline incoming client requests"
-                  urgent={pending.length > 0}
-                  onClick={() => router.push('/seller/orders')}
-                  cta="Review Orders"
-                  done={pending.length === 0}
-                />
+                {modules.ordering && (
+                  <>
+                    {/* Step 1 — Review new orders */}
+                    <ActionItem
+                      step={1}
+                      title={pending.length > 0 ? `${pending.length} order${pending.length > 1 ? 's' : ''} waiting for review` : 'No new orders'}
+                      desc="Accept or decline incoming client requests"
+                      urgent={pending.length > 0}
+                      onClick={() => router.push('/seller/orders')}
+                      cta="Review Orders"
+                      done={pending.length === 0}
+                    />
 
-                {/* Step 2 — Assign accepted orders to TSP */}
-                <ActionItem
-                  step={2}
-                  title={awaitingTSP.length > 0 ? `${awaitingTSP.length} order${awaitingTSP.length > 1 ? 's' : ''} need TSP assignment` : 'No orders awaiting TSP'}
-                  desc="Assign each accepted order to a transport provider"
-                  urgent={awaitingTSP.length > 0}
-                  onClick={() => router.push('/seller/orders')}
-                  cta="Assign TSP"
-                  done={awaitingTSP.length === 0}
-                />
+                    {/* Step 2 — Assign accepted orders to TSP */}
+                    <ActionItem
+                      step={2}
+                      title={awaitingTSP.length > 0 ? `${awaitingTSP.length} order${awaitingTSP.length > 1 ? 's' : ''} need TSP assignment` : 'No orders awaiting TSP'}
+                      desc="Assign each accepted order to a transport provider"
+                      urgent={awaitingTSP.length > 0}
+                      onClick={() => router.push('/seller/orders')}
+                      cta="Assign TSP"
+                      done={awaitingTSP.length === 0}
+                    />
+                  </>
+                )}
 
                 {/* KYC */}
                 {pendingKYC.length > 0 && (
@@ -208,7 +225,7 @@ export default function SellerDashboard() {
                 )}
 
                 {/* All clear */}
-                {pending.length === 0 && awaitingTSP.length === 0 && pendingKYC.length === 0 && (
+                {(!modules.ordering || (pending.length === 0 && awaitingTSP.length === 0)) && pendingKYC.length === 0 && (
                   <div className="px-5 py-8 text-center">
                     <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-2">
                       <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
