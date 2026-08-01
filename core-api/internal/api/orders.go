@@ -4,16 +4,80 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/anptco/core-api/internal/auth"
 	"github.com/anptco/core-api/internal/db"
 	"github.com/anptco/core-api/internal/domain"
+	"github.com/anptco/core-api/internal/qr"
 	"github.com/anptco/core-api/internal/repository"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// handleGetOrderDeliveryNote returns the delivery note for an order.
+// Accessible by CLIENT, SELLER_MANAGER, TRANSPORT_ADMIN, and PLATFORM_ADMIN.
+func (h *Handler) handleGetOrderDeliveryNote(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	claims auth.Claims,
+	rawID string,
+) (events.APIGatewayV2HTTPResponse, error) {
+	orderID, err := uuid.Parse(strings.TrimSpace(rawID))
+	if err != nil {
+		return jsonError(400, "invalid order id"), nil
+	}
+
+	// Bypass RLS — order/note may live in seller's workspace.
+	if err := db.SetWorkspace(ctx, h.pool, ""); err != nil {
+		return jsonError(500, "internal error"), nil
+	}
+
+	// Verify caller has access to this order.
+	order, err := h.orders.GetByIDRaw(ctx, orderID)
+	if err != nil {
+		h.log.Error("delivery-note: get order", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+	if order == nil {
+		return jsonError(404, "order not found"), nil
+	}
+	if claims.HasAnyRole(auth.RoleClient) &&
+		(order.ClientWorkspaceID == nil || order.ClientWorkspaceID.String() != workspaceID.String()) {
+		return jsonError(403, "forbidden"), nil
+	}
+
+	note, err := h.deliveryNotes.GetByOrderID(ctx, orderID)
+	if err != nil {
+		h.log.Error("delivery-note: get note", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+	if note == nil {
+		return jsonError(404, "delivery note not yet available"), nil
+	}
+
+	resp := map[string]interface{}{
+		"id":           note.ID,
+		"trip_id":      note.TripID,
+		"order_id":     note.OrderID,
+		"workspace_id": note.WorkspaceID,
+		"qr_confirmed": note.QRConfirmed,
+		"note_data":    note.NoteData,
+		"generated_at": note.GeneratedAt,
+	}
+
+	// Attach a presigned download URL when S3 key is stored and store is available.
+	if note.S3Key != nil && *note.S3Key != "" && h.store != nil {
+		if signedURL, presignErr := h.store.PresignDeliveryNote(ctx, *note.S3Key); presignErr == nil {
+			resp["download_url"] = signedURL
+		}
+	}
+
+	return jsonOK(resp)
+}
 
 // createTripForOrder creates a Trip row for a Mode A (full-product) order at the
 // moment loading completes. The Trip captures the fuel_loaded snapshot and
@@ -360,7 +424,7 @@ func (h *Handler) handleAssignTruck(ctx context.Context, req events.APIGatewayV2
 		ID:      uuid.New(),
 		OrderID: orderID,
 		TruckID: truckID,
-		Status:  domain.OrderStatusAssigned,
+		Status:  "LOADING", // order_assignments uses trip-phase values, not order statuses
 	}
 	if err := h.orders.AssignTruck(ctx, assignment); err != nil {
 		h.log.Warn("assign truck: create assignment row", zap.Error(err))
@@ -496,6 +560,224 @@ func (h *Handler) handleDepart(ctx context.Context, workspaceID uuid.UUID, claim
 	}
 
 	return jsonOK(order)
+}
+
+// POST /v1/orders/{id}/accept-delivery { "token": "truck_id.version.hmac" }
+// 4-gate QR delivery acceptance (CLIENT / PLATFORM_ADMIN only).
+//
+//	Gate 1 — token HMAC is valid and version matches the truck's ACTIVE qr_codes row.
+//	Gate 2 — the token's truck is the truck assigned to the active trip for this order.
+//	Gate 3 — the truck is within qrProximityM metres of the order's destination.
+//	Gate 4 — the truck's last telemetry is no older than qrRecencyLimit seconds.
+//
+// When qrKey is nil (not configured), gates 1 and 2 are skipped and the endpoint
+// accepts any token that contains a valid truck UUID — graceful degradation for
+// deployments that have not yet set QR_SIGNING_KEY.
+func (h *Handler) handleAcceptDelivery(
+	ctx context.Context,
+	req events.APIGatewayV2HTTPRequest,
+	workspaceID uuid.UUID,
+	claims auth.Claims,
+	rawID string,
+) (events.APIGatewayV2HTTPResponse, error) {
+	orderID, err := uuid.Parse(strings.TrimSpace(rawID))
+	if err != nil {
+		return jsonError(400, "invalid order id"), nil
+	}
+
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(req.Body), &body); err != nil || body.Token == "" {
+		return jsonError(400, "token is required"), nil
+	}
+
+	// Bypass RLS: order lives in seller's workspace.
+	if err := db.SetWorkspace(ctx, h.pool, ""); err != nil {
+		return jsonError(500, "internal error"), nil
+	}
+
+	order, err := h.orders.GetByIDRaw(ctx, orderID)
+	if err != nil {
+		h.log.Error("accept-delivery: get order", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+	if order == nil {
+		return jsonError(404, "order not found"), nil
+	}
+	if claims.HasAnyRole(auth.RoleClient) &&
+		(order.ClientWorkspaceID == nil || order.ClientWorkspaceID.String() != workspaceID.String()) {
+		return jsonError(403, "forbidden"), nil
+	}
+	if order.Status == domain.OrderStatusDeliveryAccepted || order.Status == domain.OrderStatusCompleted {
+		return jsonOK(order) // idempotent
+	}
+	if order.Status != domain.OrderStatusArrived {
+		return jsonError(409, "truck has not arrived"), nil
+	}
+
+	// Resolve the trip — carries dest coords + assigned truck.
+	trip, err := h.trips.GetByOrderID(ctx, orderID)
+	if err != nil {
+		h.log.Error("accept-delivery: get trip", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+	if trip == nil {
+		return jsonError(409, "no active trip found for this order"), nil
+	}
+
+	// --- Gate 1 + 2 (skip when signing key not configured) ---
+	var tokenTruckID uuid.UUID
+	if len(h.qrKey) > 0 {
+		truckIDStr, version, verErr := qr.Verify(h.qrKey, body.Token)
+		if verErr != nil {
+			return jsonError(422, "invalid or expired QR"), nil
+		}
+		tokenTruckID, err = uuid.Parse(truckIDStr)
+		if err != nil {
+			return jsonError(422, "invalid or expired QR"), nil
+		}
+		// Gate 1: check version is active in qr_codes.
+		active, qrErr := h.qrCodes.GetActiveByTruckID(ctx, tokenTruckID)
+		if qrErr != nil {
+			h.log.Error("accept-delivery: get active qr", zap.Error(qrErr))
+			return jsonError(500, "internal error"), nil
+		}
+		if active == nil || active.Version != version {
+			return jsonError(422, "invalid or expired QR"), nil
+		}
+		// Gate 2: token truck must be the trip's truck.
+		if tokenTruckID != trip.TruckID {
+			return jsonError(422, "wrong truck for this order"), nil
+		}
+	} else {
+		// Graceful degradation: extract UUID from token string.
+		uuidStr := body.Token
+		if len(uuidStr) > 36 {
+			uuidStr = uuidStr[:36]
+		}
+		tokenTruckID, err = uuid.Parse(strings.TrimSpace(uuidStr))
+		if err != nil {
+			return jsonError(422, "invalid QR token"), nil
+		}
+		if tokenTruckID != trip.TruckID {
+			return jsonError(422, "wrong truck for this order"), nil
+		}
+	}
+
+	// --- Gates 3 + 4: proximity and recency ---
+	pos, err := h.trucks.GetPosition(ctx, tokenTruckID)
+	if err != nil {
+		h.log.Error("accept-delivery: get truck position", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+	if pos == nil || pos.Latitude == nil || pos.Longitude == nil {
+		return jsonError(409, "truck position is not available"), nil
+	}
+	// Gate 3: proximity.
+	distM := haversineM(*pos.Latitude, *pos.Longitude, trip.DestLat, trip.DestLng)
+	if distM > qrProximityM {
+		return jsonError(409, "truck no longer at destination"), nil
+	}
+	// Gate 4: recency.
+	if pos.LastMessageAt == nil || time.Since(*pos.LastMessageAt) > time.Duration(qrRecencyLimit)*time.Second {
+		return jsonError(409, "truck position is stale — cannot confirm"), nil
+	}
+
+	// All gates passed — advance order + trip.
+	if err := h.orders.UpdateStatus(ctx, orderID, order.WorkspaceID, domain.OrderStatusDeliveryAccepted); err != nil {
+		h.log.Error("accept-delivery: update order status", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+	if err := h.trips.UpdateStatus(ctx, trip.ID, domain.TripStatusDeliveryAccepted); err != nil {
+		h.log.Warn("accept-delivery: update trip status", zap.Error(err), zap.String("trip_id", trip.ID.String()))
+	}
+
+	h.log.Info("delivery accepted via 4-gate QR",
+		zap.String("order_id", orderID.String()),
+		zap.String("trip_id", trip.ID.String()),
+		zap.String("truck_id", tokenTruckID.String()),
+		zap.Float64("dist_m", distM),
+	)
+
+	// Generate delivery note (non-fatal — acceptance already succeeded).
+	h.generateDeliveryNote(ctx, order, trip, tokenTruckID, distM, time.Since(*pos.LastMessageAt), claims.Sub)
+
+	order.Status = domain.OrderStatusDeliveryAccepted
+	return jsonOK(order)
+}
+
+// generateDeliveryNote builds and persists the delivery note for a just-accepted delivery.
+// Non-fatal: errors are logged but do not fail the acceptance.
+func (h *Handler) generateDeliveryNote(
+	ctx context.Context,
+	order *domain.Order,
+	trip *domain.Trip,
+	truckID uuid.UUID,
+	distM float64,
+	telemetryAge time.Duration,
+	acceptedBy string,
+) {
+	now := time.Now().UTC()
+	notePayload := map[string]interface{}{
+		"trip_id":            trip.ID,
+		"order_id":           order.ID,
+		"workspace_id":       order.WorkspaceID,
+		"truck_id":           truckID,
+		"driver_name":        trip.DriverName,
+		"origin_name":        trip.OriginName,
+		"dest_name":          trip.DestName,
+		"volume_ordered_liters": order.VolumeLiters,
+		"fuel_type":          order.FuelType,
+		"fuel_loaded":        trip.FuelLoaded,
+		"fuel_delivered":     trip.FuelDelivered,
+		"qr_confirmed":       true,
+		"dist_m":             math.Round(distM*10) / 10,
+		"telemetry_age_s":    int(telemetryAge.Seconds()),
+		"accepted_by":        acceptedBy,
+		"accepted_at":        now,
+	}
+
+	noteJSON, err := json.Marshal(notePayload)
+	if err != nil {
+		h.log.Warn("delivery-note: marshal", zap.Error(err))
+		return
+	}
+
+	note := &domain.DeliveryNote{
+		ID:          uuid.New(),
+		TripID:      trip.ID,
+		WorkspaceID: order.WorkspaceID,
+		QRConfirmed: true,
+		NoteData:    domain.JSONB(noteJSON),
+		GeneratedAt: now,
+	}
+	note.OrderID = &order.ID
+
+	// Upload to S3 when store is available.
+	if h.store != nil {
+		key, uploadErr := h.store.UploadDeliveryNote(ctx, trip.ID.String(), noteJSON)
+		if uploadErr != nil {
+			h.log.Warn("delivery-note: upload to S3", zap.Error(uploadErr))
+		} else {
+			note.S3Key = &key
+		}
+	}
+
+	if err := h.deliveryNotes.Insert(ctx, note); err != nil {
+		h.log.Warn("delivery-note: insert", zap.Error(err))
+	}
+}
+
+// haversineM returns the great-circle distance in metres between two lat/lng points.
+func haversineM(lat1, lng1, lat2, lng2 float64) float64 {
+	const R = 6_371_000 // Earth radius in metres
+	φ1 := lat1 * math.Pi / 180
+	φ2 := lat2 * math.Pi / 180
+	Δφ := (lat2 - lat1) * math.Pi / 180
+	Δλ := (lng2 - lng1) * math.Pi / 180
+	a := math.Sin(Δφ/2)*math.Sin(Δφ/2) + math.Cos(φ1)*math.Cos(φ2)*math.Sin(Δλ/2)*math.Sin(Δλ/2)
+	return R * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
 // simpleAdvance advances an order from → to and returns the updated order.

@@ -58,6 +58,11 @@ func (r *geofenceRepo) GetByRefID(ctx context.Context, refID string) (*domain.Ge
 	return &g, nil
 }
 
+func (r *geofenceRepo) SetSelfRefID(ctx context.Context, id uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE geofences SET ref_id = id::text WHERE id = $1`, id)
+	return err
+}
+
 func (r *geofenceRepo) GetByID(ctx context.Context, id uuid.UUID, workspaceID uuid.UUID) (*domain.Geofence, error) {
 	const q = `
 		SELECT id, workspace_id, type, ref_id, name, latitude, longitude, radius_meters, created_at

@@ -11,13 +11,11 @@ import (
 )
 
 // Values is the JSON shape of the Secrets Manager secret.
-// Matches the same secret used by the ingestion service:
-//
-//	{"database_url": "postgres://...", "flespi_webhook_secret": "..."}
-//
-// Only database_url is required here; extra keys are ignored.
+// Matches the same secret used by the ingestion service.
+// Go's JSON unmarshaler is case-insensitive so both DATABASE_URL and database_url work.
 type Values struct {
-	DatabaseURL string `json:"database_url"`
+	DatabaseURL    string `json:"database_url"`
+	QRSigningKey   string `json:"qr_signing_key"` // hex-encoded 32-byte HMAC key for QR tokens
 }
 
 func Fetch(ctx context.Context, arn string) (*Values, error) {

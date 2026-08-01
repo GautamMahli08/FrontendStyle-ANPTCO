@@ -9,6 +9,7 @@ import (
 	"github.com/anptco/core-api/internal/auth"
 	"github.com/anptco/core-api/internal/db"
 	"github.com/anptco/core-api/internal/domain"
+	"github.com/anptco/core-api/internal/qr"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 	qrcode "github.com/skip2/go-qrcode"
@@ -78,13 +79,33 @@ func (h *Handler) handleGetTruckQR(
 		return jsonError(503, "QR storage not configured"), nil
 	}
 
-	// Return cached URL if already set.
-	if truck.QRUrl != nil && *truck.QRUrl != "" {
+	// Resolve the QR payload: signed token when key is configured, else raw truck ID.
+	payload := truck.ID.String()
+	if len(h.qrKey) > 0 {
+		active, qrErr := h.qrCodes.GetActiveByTruckID(ctx, truckID)
+		if qrErr != nil {
+			h.log.Warn("get-truck-qr: look up active qr code", zap.Error(qrErr))
+		}
+		if active != nil {
+			payload = qr.Build(h.qrKey, truckID.String(), active.Version)
+		} else {
+			// Lazy-issue version 1 if none exists (e.g. trucks created before M4).
+			h.issueInitialQR(ctx, truckID, "system")
+			active, _ = h.qrCodes.GetActiveByTruckID(ctx, truckID)
+			if active != nil {
+				payload = qr.Build(h.qrKey, truckID.String(), active.Version)
+			}
+		}
+	}
+
+	// Return cached URL only when the payload hasn't changed format.
+	// If qrKey is now set but the cached URL encodes a raw truck_id, regenerate.
+	if truck.QRUrl != nil && *truck.QRUrl != "" && len(h.qrKey) == 0 {
 		return jsonOK(map[string]string{"qr_url": *truck.QRUrl})
 	}
 
 	// Generate on demand.
-	qrURL, err := generateAndUploadQR(ctx, h, truck.ID.String())
+	qrURL, err := generateAndUploadQR(ctx, h, payload, truck.ID.String())
 	if err != nil {
 		h.log.Error("generate QR on demand", zap.Error(err))
 		return jsonError(500, "internal error"), nil
@@ -118,9 +139,10 @@ func (h *Handler) handleKYCUploadURL(
 	return jsonOK(map[string]string{"upload_url": url, "key": key})
 }
 
-// generateAndUploadQR generates a QR PNG for truckID, uploads it, and persists the URL.
-func generateAndUploadQR(ctx context.Context, h *Handler, truckID string) (string, error) {
-	png, err := qrcode.Encode(truckID, qrcode.Medium, 256)
+// generateAndUploadQR encodes payload into a QR PNG, uploads it under truckID's S3 key,
+// and persists the URL. payload is what's encoded in the QR (signed token or raw truck ID).
+func generateAndUploadQR(ctx context.Context, h *Handler, payload, truckID string) (string, error) {
+	png, err := qrcode.Encode(payload, qrcode.Medium, 256)
 	if err != nil {
 		return "", fmt.Errorf("qr encode: %w", err)
 	}
@@ -130,7 +152,6 @@ func generateAndUploadQR(ctx context.Context, h *Handler, truckID string) (strin
 	}
 	id, _ := uuid.Parse(truckID)
 	if err := h.trucks.UpdateQRUrl(ctx, id, qrURL); err != nil {
-		// Non-fatal — URL will be regenerated next call.
 		h.log.Warn("persist qr_url", zap.Error(err))
 	}
 	return qrURL, nil

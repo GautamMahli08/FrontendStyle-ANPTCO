@@ -284,6 +284,33 @@ export interface ApiIntegration {
   notes?:      string;
 }
 
+export interface ApiDeliveryNote {
+  id:           string;
+  trip_id:      string;
+  order_id?:    string;
+  workspace_id: string;
+  qr_confirmed: boolean;
+  note_data:    {
+    trip_id?:                string;
+    order_id?:               string;
+    truck_id?:               string;
+    driver_name?:            string;
+    origin_name?:            string;
+    dest_name?:              string;
+    volume_ordered_liters?:  number;
+    fuel_type?:              string;
+    fuel_loaded?:            Record<string, number>;
+    fuel_delivered?:         Record<string, number>;
+    qr_confirmed?:           boolean;
+    dist_m?:                 number;
+    telemetry_age_s?:        number;
+    accepted_by?:            string;
+    accepted_at?:            string;
+  };
+  generated_at: string;
+  download_url?: string;
+}
+
 // ── ERP Client portal types ───────────────────────────────────
 export interface ApiClientMe {
   workspace_id:   string;
@@ -330,6 +357,14 @@ async function apiFetch<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const token = await getCachedToken();
+
+  // No valid Cognito session — bounce to login immediately so the user
+  // sees a clear "session expired" message rather than a cryptic 401.
+  if (!token && typeof window !== 'undefined') {
+    window.location.href = '/auth/login';
+    throw new Error('Session expired — please log in again');
+  }
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
@@ -339,6 +374,14 @@ async function apiFetch<T>(
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
 
   if (!res.ok) {
+    // 401 from API Gateway means the token was rejected (expired or invalid).
+    // Clear the cached token so the next call re-fetches, then bounce to login.
+    if (res.status === 401) {
+      _cachedToken = null;
+      _tokenExpiresAt = 0;
+      if (typeof window !== 'undefined') window.location.href = '/auth/login';
+      throw new Error('Session expired — please log in again');
+    }
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`API ${res.status}: ${text}`);
   }
@@ -399,12 +442,23 @@ export const api = {
     depart: (id: string) =>
       apiFetch<ApiOrder>(`/v1/orders/${id}/depart`, { method: 'PATCH' }),
 
-    // ARRIVED → DELIVERY_ACCEPTED (QR scan; truck_id is the value encoded in the QR)
+    // ARRIVED → DELIVERY_ACCEPTED (legacy driver scan, no QR gates)
     scan: (id: string, truckId: string) =>
       apiFetch<ApiOrder>(`/v1/orders/${id}/scan`, {
         method: 'PATCH',
         body:   JSON.stringify({ truck_id: truckId }),
       }),
+
+    // ARRIVED → DELIVERY_ACCEPTED via 4-gate QR (CLIENT role).
+    // token is the full signed string from the truck's QR sticker.
+    acceptDelivery: (id: string, token: string) =>
+      apiFetch<ApiOrder>(`/v1/orders/${id}/accept-delivery`, {
+        method: 'POST',
+        body:   JSON.stringify({ token }),
+      }),
+
+    getDeliveryNote: (id: string) =>
+      apiFetch<ApiDeliveryNote>(`/v1/orders/${id}/delivery-note`),
   },
 
   // ── Sellers ─────────────────────────────────────────────────

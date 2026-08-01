@@ -216,7 +216,8 @@ func (h *Handler) handleReviewSensorRequest(
 			if err != nil || truck == nil {
 				h.log.Warn("get truck for QR generation after approval", zap.Error(err))
 			} else {
-				if _, err := generateAndUploadQR(ctx, h, truck.ID.String()); err != nil {
+				h.issueInitialQR(ctx, truck.ID, claims.Sub)
+				if _, err := generateAndUploadQR(ctx, h, truck.ID.String(), truck.ID.String()); err != nil {
 					h.log.Warn("generate QR after sensor approval", zap.Error(err),
 						zap.String("truck_id", truck.ID.String()))
 				}

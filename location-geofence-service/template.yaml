@@ -49,6 +49,13 @@ Parameters:
     Description: >
       Days to retain raw truck_telemetry rows. The maintenance function drops
       monthly partitions whose entire date range is older than this window.
+  DefaultDeviceIdent:
+    Type: String
+    Default: ""
+    Description: >
+      Fallback device IMEI used when the flespi stream is not configured to
+      forward the "ident" field. Set to the device IMEI to accept messages
+      without per-message ident.
 
 # ── Conditions ────────────────────────────────────────────────────────────────
 Conditions:
@@ -72,6 +79,7 @@ Globals:
         LOG_LEVEL:              !Ref LogLevel
         EVENTS_BUS_NAME:           !Ref EventBusName
         TELEMETRY_RETENTION_DAYS:  !Ref TelemetryRetentionDays
+        DEFAULT_DEVICE_IDENT:      !Ref DefaultDeviceIdent
 
 # ── Resources ─────────────────────────────────────────────────────────────────
 Resources:

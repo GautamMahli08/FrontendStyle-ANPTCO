@@ -76,3 +76,31 @@ func (s *S3Store) PresignKYCDownload(ctx context.Context, key string) (string, e
 	}
 	return req.URL, nil
 }
+
+// UploadDeliveryNote stores a delivery note JSON in the KYC bucket and returns the S3 key.
+func (s *S3Store) UploadDeliveryNote(ctx context.Context, tripID string, data []byte) (string, error) {
+	key := fmt.Sprintf("delivery-notes/%s.json", tripID)
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.kycBucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("application/json"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("s3: upload delivery note %s: %w", tripID, err)
+	}
+	return key, nil
+}
+
+// PresignDeliveryNote returns a 1-hour GET pre-signed URL for a delivery note JSON.
+func (s *S3Store) PresignDeliveryNote(ctx context.Context, key string) (string, error) {
+	presignClient := s3.NewPresignClient(s.client)
+	req, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.kycBucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(time.Hour))
+	if err != nil {
+		return "", fmt.Errorf("s3: presign delivery note %s: %w", key, err)
+	}
+	return req.URL, nil
+}

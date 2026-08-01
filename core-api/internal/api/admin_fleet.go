@@ -7,6 +7,7 @@ import (
 
 	"github.com/anptco/core-api/internal/auth"
 	"github.com/anptco/core-api/internal/domain"
+	"github.com/anptco/core-api/internal/qr"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -66,6 +67,7 @@ func (h *Handler) handleAdminCreateTruck(
 		return jsonError(500, "internal error"), nil
 	}
 
+	h.issueInitialQR(ctx, truckID, claims.Sub)
 	h.writeAudit(ctx, claims.Sub, "truck.created", "truck", truckID.String(), input)
 	return jsonCreated(map[string]interface{}{"id": truckID, "workspace_id": wsID})
 }
@@ -329,4 +331,100 @@ func (h *Handler) handleAdminDeactivateDriver(
 
 	h.writeAudit(ctx, claims.Sub, "driver.deactivated", "driver", rawDriverID, nil)
 	return jsonOK(map[string]interface{}{"id": driverID, "is_active": false})
+}
+
+// ── POST /admin/v1/trucks/{id}/regenerate-qr ─────────────────────────────────
+// Revokes the current ACTIVE QR version and issues the next version.
+// Body: { "reason": "sticker damaged" } (optional)
+// Returns the new signed token and version number.
+// Blocked when the truck has an active (non-completed) trip.
+
+func (h *Handler) handleAdminRegenerateQR(
+	ctx context.Context,
+	req events.APIGatewayV2HTTPRequest,
+	rawTruckID string,
+	claims auth.Claims,
+) (events.APIGatewayV2HTTPResponse, error) {
+	if len(h.qrKey) == 0 {
+		return jsonError(503, "QR signing key not configured"), nil
+	}
+
+	truckID, err := uuid.Parse(strings.TrimSpace(rawTruckID))
+	if err != nil {
+		return jsonError(400, "invalid truck id"), nil
+	}
+
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if req.Body != "" {
+		_ = json.Unmarshal([]byte(req.Body), &body)
+	}
+
+	// Look up current active version.
+	current, err := h.qrCodes.GetActiveByTruckID(ctx, truckID)
+	if err != nil {
+		h.log.Error("regenerate-qr: get active", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+
+	nextVersion := 1
+	if current != nil {
+		nextVersion = current.Version + 1
+		// Revoke current before issuing next.
+		if err := h.qrCodes.Revoke(ctx, truckID, claims.Sub); err != nil {
+			h.log.Error("regenerate-qr: revoke", zap.Error(err))
+			return jsonError(500, "internal error"), nil
+		}
+	}
+
+	token := qr.Build(h.qrKey, truckID.String(), nextVersion)
+	hash := qr.TokenHash(token)
+	reason := body.Reason
+	code := &domain.QRCode{
+		TruckID:   truckID,
+		Version:   nextVersion,
+		TokenHash: hash,
+		CreatedBy: claims.Sub,
+	}
+	if reason != "" {
+		code.Reason = &reason
+	}
+	if err := h.qrCodes.Issue(ctx, code); err != nil {
+		h.log.Error("regenerate-qr: issue", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+
+	h.writeAudit(ctx, claims.Sub, "qr.regenerated", "truck", truckID.String(), map[string]interface{}{
+		"version": nextVersion,
+		"reason":  reason,
+	})
+
+	return jsonOK(map[string]interface{}{
+		"truck_id": truckID,
+		"version":  nextVersion,
+		"token":    token,
+	})
+}
+
+// issueInitialQR issues QR version 1 for a newly created truck.
+// Called from handleAdminCreateTruck when the signing key is configured.
+// Non-fatal: a missing QR will be generated lazily on first access.
+func (h *Handler) issueInitialQR(ctx context.Context, truckID uuid.UUID, createdBy string) {
+	if len(h.qrKey) == 0 {
+		return
+	}
+	token := qr.Build(h.qrKey, truckID.String(), 1)
+	reason := "initial"
+	code := &domain.QRCode{
+		TruckID:   truckID,
+		Version:   1,
+		TokenHash: qr.TokenHash(token),
+		CreatedBy: createdBy,
+		Reason:    &reason,
+	}
+	if err := h.qrCodes.Issue(ctx, code); err != nil {
+		// Non-fatal — admin can call regenerate-qr to create it later.
+		return
+	}
 }

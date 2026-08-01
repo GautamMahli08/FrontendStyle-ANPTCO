@@ -106,6 +106,10 @@ func (h *Handler) routeAdmin(
 		id := truckSegment(p, "/devices")
 		return h.handleAdminListDeviceAssignments(ctx, id)
 
+	case method == "POST" && strings.HasPrefix(p, "/trucks/") && strings.HasSuffix(p, "/regenerate-qr"):
+		id := truckSegment(p, "/regenerate-qr")
+		return h.handleAdminRegenerateQR(ctx, req, id, claims)
+
 	// ── Drivers: update / deactivate ─────────────────────────────────────────
 	case method == "PATCH" && isWorkspaceDriverPath(p):
 		wsID, driverID := workspaceDriverIDs(p)

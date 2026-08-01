@@ -38,7 +38,10 @@ func (h *Handler) handleCreateStation(
 		h.log.Error("create station", zap.Error(err))
 		return jsonError(500, "internal error"), nil
 	}
-	// ref_id defaults to the geofence UUID so orders can reference it.
+	// Set ref_id = id so createTripForOrder can look up destination coords by station UUID.
+	if err := h.geofences.SetSelfRefID(ctx, g.ID); err != nil {
+		h.log.Warn("create station: set ref_id", zap.Error(err))
+	}
 	refID := g.ID.String()
 	g.RefID = &refID
 

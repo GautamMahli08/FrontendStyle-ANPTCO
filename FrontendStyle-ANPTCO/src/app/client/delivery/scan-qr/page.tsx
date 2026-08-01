@@ -70,15 +70,19 @@ function ScanQRContent() {
   }, []);
 
   const handleScannedValue = useCallback(async (raw: string) => {
-    // Extract UUID from raw value (QR may encode a URL containing the truck UUID)
+    // Keep the full token — the backend verifies the HMAC and extracts the truck ID.
+    // Also extract the UUID portion to fetch live position for display.
+    const token     = raw.trim();
     const uuidMatch = raw.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-    const truckId   = uuidMatch ? uuidMatch[0] : raw.trim();
-    setScannedTruckId(truckId);
-    try {
-      const pos = await api.trucks.getPosition(truckId);
-      setTruckPosition(pos);
-    } catch {
-      setTruckPosition(null);
+    const truckId   = uuidMatch ? uuidMatch[0] : '';
+    setScannedTruckId(token);
+    if (truckId) {
+      try {
+        const pos = await api.trucks.getPosition(truckId);
+        setTruckPosition(pos);
+      } catch {
+        setTruckPosition(null);
+      }
     }
   }, []);
 
@@ -122,12 +126,12 @@ function ScanQRContent() {
     }
   }, [handleScannedValue, stopCamera]);
 
-  const confirm = async (truckId: string) => {
+  const confirm = async (token: string) => {
     if (!order) return;
     setConfirming(true);
     setError(null);
     try {
-      await api.orders.scan(order.id, truckId);
+      await api.orders.acceptDelivery(order.id, token);
       stopCamera();
       setDone(true);
     } catch (e: any) {

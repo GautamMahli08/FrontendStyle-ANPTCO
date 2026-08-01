@@ -20,6 +20,7 @@ function groupToRole(groups: string[]): UserRole {
   if (groups.includes('TRANSPORT_ADMIN')) return 'TRANSPORT_ADMIN';
   if (groups.includes('DRIVER'))          return 'DRIVER';
   if (groups.includes('ERP_CLIENT'))      return 'ERP_CLIENT';
+  if (groups.includes('CLIENT'))          return 'CLIENT';
   return 'CLIENT';
 }
 

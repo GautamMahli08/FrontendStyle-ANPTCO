@@ -21,4 +21,8 @@ type GeofenceRepository interface {
 	// station ID string, or nil when not found. Used to resolve destination
 	// coordinates when creating a Trip from an order.
 	GetByRefID(ctx context.Context, refID string) (*domain.Geofence, error)
+
+	// SetSelfRefID sets ref_id = id::text for a geofence that was created
+	// without a ref_id (happens when a station is created via POST /v1/stations).
+	SetSelfRefID(ctx context.Context, id uuid.UUID) error
 }

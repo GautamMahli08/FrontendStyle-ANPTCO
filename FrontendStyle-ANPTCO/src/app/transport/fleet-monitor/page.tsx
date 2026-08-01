@@ -1,20 +1,20 @@
 'use client';
 
-import { useState, useEffect, useCallback, useId, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
 import { getCurrentUser } from '@/src/lib/user-store';
 import { api, type ApiTruck, type ApiAssetEvent, type ApiGeofence } from '@/src/lib/api';
-import type { FleetMarker, TestWaypoint } from '@/src/components/FleetMap';
+import type { FleetMarker, TestWaypoint, DepotZone } from '@/src/components/FleetMap';
 
 const FleetMap = dynamic(() => import('@/src/components/FleetMap'), { ssr: false });
 
 const EVENT_CFG: Record<string, { label: string; dot: string; icon: string; urgent?: boolean }> = {
   // Geofence transitions — shown first in the alert feed
-  GEOFENCE_ENTER_STATION: { label: 'Arrived at Destination', dot: 'bg-green-500',  icon: '📍', urgent: true },
-  GEOFENCE_EXIT_STATION:  { label: 'Left Destination',       dot: 'bg-slate-400',  icon: '📍' },
+  GEOFENCE_ENTER_STATION: { label: 'Entered Station Zone',   dot: 'bg-green-500',  icon: '📍' },
+  GEOFENCE_EXIT_STATION:  { label: 'Left Station Zone',      dot: 'bg-slate-400',  icon: '📍' },
   GEOFENCE_ENTER_DEPOT:   { label: 'Arrived at Depot',       dot: 'bg-indigo-500', icon: '🏭' },
   GEOFENCE_EXIT_DEPOT:    { label: 'Left Depot',             dot: 'bg-slate-300',  icon: '🏭' },
   // Asset state transitions
@@ -30,6 +30,14 @@ const EVENT_CFG: Record<string, { label: string; dot: string; icon: string; urge
 
 const WP_DOT = ['bg-blue-500', 'bg-purple-500'];
 
+const FIXED_DEST: TestWaypoint = {
+  id:     'fixed-dest',
+  lat:    23.6540469,
+  lng:    58.0965125,
+  name:   'Destination',
+  radius: 500,
+};
+
 function timeAgo(iso: string) {
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60)   return `${s}s ago`;
@@ -40,7 +48,6 @@ function timeAgo(iso: string) {
 export default function TransportFleetMonitorPage() {
   const router = useRouter();
   const user   = getCurrentUser();
-  const uid    = useId();
 
   const [trucks,       setTrucks]       = useState<ApiTruck[]>([]);
   const [alerts,       setAlerts]       = useState<ApiAssetEvent[]>([]);
@@ -49,9 +56,10 @@ export default function TransportFleetMonitorPage() {
   const [error,        setError]        = useState<string | null>(null);
   const initialLoad    = useRef(true);
 
-  // Waypoints placed on map
-  const [waypoints,    setWaypoints]    = useState<TestWaypoint[]>([]);
-  const [placingMode,  setPlacingMode]  = useState(false);
+  // Fixed destination — always pre-set, reset restores it
+  const [waypoints,    setWaypoints]    = useState<TestWaypoint[]>([{ ...FIXED_DEST }]);
+
+  const [downloading, setDownloading] = useState(false);
 
   // Dispatch controls
   const [destTruck,       setDestTruck]       = useState('');
@@ -66,7 +74,7 @@ export default function TransportFleetMonitorPage() {
   const [depotName,    setDepotName]    = useState('Main Depot');
   const [depotLat,     setDepotLat]     = useState('');
   const [depotLng,     setDepotLng]     = useState('');
-  const [depotRadius,  setDepotRadius]  = useState('100');
+  const [depotRadius,  setDepotRadius]  = useState('500');
   const [savingDepot,  setSavingDepot]  = useState(false);
   const [depotErr,     setDepotErr]     = useState('');
 
@@ -108,25 +116,55 @@ export default function TransportFleetMonitorPage() {
     if (!destTruck && trucks.length > 0) setDestTruck(trucks[0].id);
   }, [trucks, destTruck]);
 
-  const handleMapClick = (lat: number, lng: number) => {
-    if (!placingMode) return;
-    if (waypoints.length >= 1) return;
-    setWaypoints([{ id: `${uid}-1`, lat, lng, name: 'Destination', radius: 200 }]);
-    setPlacingMode(false); // auto-exit once the single point is placed
+  const downloadReport = async () => {
+    setDownloading(true);
+    try {
+      const [trips, events] = await Promise.all([
+        api.trips.list(),
+        api.fleet.events(),
+      ]);
+
+      const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const row = (cols: unknown[]) => cols.map(esc).join(',');
+
+      const lines: string[] = [];
+
+      // ── Trip history ──────────────────────────────────────────
+      lines.push('TRIP HISTORY');
+      lines.push(row(['Trip ID','Truck ID','Destination','Origin','Status','Created','Updated']));
+      for (const t of (trips ?? []).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())) {
+        lines.push(row([t.id, t.truck_id, t.dest_name, t.origin_name ?? '', t.status, t.created_at, t.updated_at]));
+      }
+
+      lines.push('');
+
+      // ── Asset events ──────────────────────────────────────────
+      lines.push('ASSET EVENTS');
+      lines.push(row(['Timestamp','Event Type','Truck ID','Geofence Zone','Value Before','Value After','Latitude','Longitude']));
+      for (const e of (events ?? []).sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime())) {
+        lines.push(row([e.occurred_at, e.event_type, e.truck_id, e.geofence_zone ?? '', e.value_before ?? '', e.value_after ?? '', e.latitude ?? '', e.longitude ?? '']));
+      }
+
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `fleet-activity-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(`Download failed: ${e.message}`);
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const updateWaypoint = (id: string, patch: Partial<TestWaypoint>) =>
     setWaypoints(prev => prev.map(w => w.id === id ? { ...w, ...patch } : w));
 
-  const removeWaypoint = (id: string) => {
-    setWaypoints(prev => prev.filter(w => w.id !== id));
-    setDispatchMsgs(prev => { const n = { ...prev }; delete n[id]; return n; });
-  };
-
   const resetTest = () => {
-    setWaypoints([]);
+    setWaypoints([{ ...FIXED_DEST }]);
     setDispatchMsgs({});
-    setPlacingMode(false);
   };
 
   const dispatchWaypoint = async (wp: TestWaypoint) => {
@@ -170,8 +208,9 @@ export default function TransportFleetMonitorPage() {
 
   // Poll trip status every 10 s for active dispatched trips
   useEffect(() => {
+    // Keep polling through DELIVERY_ACCEPTED — depot entry auto-advances to COMPLETED
     const active = Object.entries(dispatchMsgs).filter(
-      ([, m]) => m.ok && m.tripId && m.tripStatus !== 'DELIVERY_ACCEPTED' && m.tripStatus !== 'COMPLETED'
+      ([, m]) => m.ok && m.tripId && m.tripStatus !== 'COMPLETED'
     );
     if (active.length === 0) return;
     const t = setInterval(async () => {
@@ -180,7 +219,13 @@ export default function TransportFleetMonitorPage() {
           const trip = await api.trips.get(m.tripId!);
           setDispatchMsgs(prev => ({
             ...prev,
-            [wpId]: { ...prev[wpId], tripStatus: trip.status, msg: trip.status === 'ARRIVED' ? 'Arrived at destination!' : prev[wpId].msg },
+            [wpId]: {
+              ...prev[wpId],
+              tripStatus: trip.status,
+              msg: trip.status === 'ARRIVED'    ? 'Arrived at destination!'
+                 : trip.status === 'COMPLETED'  ? 'Returned to depot — trip complete.'
+                 : prev[wpId].msg,
+            },
           }));
         } catch {}
       }
@@ -244,7 +289,7 @@ export default function TransportFleetMonitorPage() {
             {[
               { label: 'Total Trucks',    value: trucks.length                },
               { label: 'On Map',          value: markers.length               },
-              { label: 'Destination Set',  value: waypoints.length ? 'Yes' : 'No' },
+              { label: 'Destination',      value: `${FIXED_DEST.lat.toFixed(4)}, ${FIXED_DEST.lng.toFixed(4)}` },
               { label: 'Events (loaded)', value: alerts.length                },
             ].map(s => (
               <div key={s.label} className="bg-white rounded-xl border border-slate-200 p-4">
@@ -281,33 +326,10 @@ export default function TransportFleetMonitorPage() {
             <div className="col-span-3 bg-white rounded-xl border border-slate-200 overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
                 <p className="text-sm font-semibold text-slate-700">Live Map</p>
-                <div className="flex items-center gap-2">
-                  {placingMode && (
-                    <span className="text-xs font-medium text-blue-600 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-full animate-pulse">
-                      Tap map to place destination
-                    </span>
-                  )}
-                  {!placingMode && waypoints.length === 0 && (
-                    <button
-                      onClick={() => setPlacingMode(true)}
-                      className="text-xs font-semibold text-blue-600 border border-blue-200 hover:border-blue-400 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition"
-                    >
-                      + Place Destination
-                    </button>
-                  )}
-                  {waypoints.length > 0 && (
-                    <button
-                      onClick={resetTest}
-                      className="text-xs text-slate-400 hover:text-red-500 transition"
-                    >
-                      Clear all
-                    </button>
-                  )}
-                </div>
               </div>
               {loading ? (
                 <div className="h-96 flex items-center justify-center text-slate-400 text-sm">Loading…</div>
-              ) : markers.length === 0 && !placingMode ? (
+              ) : markers.length === 0 ? (
                 <div className="h-96 flex flex-col items-center justify-center text-slate-400 gap-2">
                   <span className="text-3xl">📍</span>
                   <p className="text-sm">No GPS data yet.</p>
@@ -316,9 +338,9 @@ export default function TransportFleetMonitorPage() {
                 <FleetMap
                   markers={markers}
                   waypoints={waypoints}
-                  onMapClick={handleMapClick}
-                  placingMode={placingMode}
-                  height={380}
+                  depots={depots as DepotZone[]}
+                  height={520}
+                  selectedTruckId={destTruck || undefined}
                 />
               )}
             </div>
@@ -330,10 +352,10 @@ export default function TransportFleetMonitorPage() {
               <div className="bg-white rounded-xl border border-slate-200">
                 <div className="px-4 py-3 border-b border-slate-100 flex items-start justify-between gap-2">
                   <div>
-                    <p className="text-sm font-semibold text-slate-700">Test Geofence</p>
-                    <p className="text-xs text-slate-400 mt-0.5">Place a destination on the map, then dispatch the truck.</p>
+                    <p className="text-sm font-semibold text-slate-700">Dispatch</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Select a truck and dispatch to the fixed destination.</p>
                   </div>
-                  {(waypoints.length > 0 || Object.keys(dispatchMsgs).length > 0) && (
+                  {Object.keys(dispatchMsgs).length > 0 && (
                     <button
                       onClick={resetTest}
                       className="shrink-0 text-xs font-medium text-red-500 border border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition"
@@ -357,34 +379,21 @@ export default function TransportFleetMonitorPage() {
                   </div>
                 </div>
 
-                {/* Placed waypoint */}
-                {waypoints.length === 0 ? (
-                  <div className="px-4 pb-4 text-center">
-                    <p className="text-xs text-slate-400">
-                      Click <span className="font-semibold text-blue-600">+ Place Destination</span> then tap the map.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-50">
-                    {waypoints.map((wp, i) => {
-                      const msg = dispatchMsgs[wp.id];
-                      return (
-                        <div key={wp.id} className="px-4 py-3 space-y-2">
-                          <div className="flex items-center gap-2">
-                            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${WP_DOT[i]}`} />
-                            <input
-                              value={wp.name}
-                              onChange={e => updateWaypoint(wp.id, { name: e.target.value })}
-                              className="flex-1 text-xs font-semibold text-slate-800 border-0 outline-none bg-transparent"
-                              placeholder={`Point ${i + 1}`}
-                            />
-                            <button
-                              onClick={() => removeWaypoint(wp.id)}
-                              className="text-slate-300 hover:text-red-400 transition text-sm leading-none"
-                            >
-                              ×
-                            </button>
-                          </div>
+                {/* Fixed destination waypoint */}
+                <div className="divide-y divide-slate-50">
+                  {waypoints.map((wp, i) => {
+                    const msg = dispatchMsgs[wp.id];
+                    return (
+                      <div key={wp.id} className="px-4 py-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${WP_DOT[i]}`} />
+                          <input
+                            value={wp.name}
+                            onChange={e => updateWaypoint(wp.id, { name: e.target.value })}
+                            className="flex-1 text-xs font-semibold text-slate-800 border-0 outline-none bg-transparent"
+                            placeholder="Destination"
+                          />
+                        </div>
                           <div className="flex items-center gap-2 text-[11px] text-slate-400">
                             <span className="font-mono">{wp.lat.toFixed(5)}, {wp.lng.toFixed(5)}</span>
                           </div>
@@ -424,13 +433,15 @@ export default function TransportFleetMonitorPage() {
                             </button>
                           )}
                           {msg?.tripStatus === 'DELIVERY_ACCEPTED' && (
-                            <p className="text-[11px] text-green-600 font-medium">Delivery confirmed ✓ — return to depot to close trip.</p>
+                            <p className="text-[11px] text-amber-600 font-medium">Delivery confirmed ✓ — waiting for truck to return to depot…</p>
+                          )}
+                          {msg?.tripStatus === 'COMPLETED' && (
+                            <p className="text-[11px] text-indigo-600 font-medium">🏭 Returned to depot — trip complete.</p>
                           )}
                         </div>
                       );
                     })}
-                  </div>
-                )}
+                </div>
 
               </div>
 
@@ -438,7 +449,16 @@ export default function TransportFleetMonitorPage() {
               <div className="bg-white rounded-xl border border-slate-200 flex flex-col" style={{ maxHeight: 520 }}>
                 <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 shrink-0">
                   <p className="text-sm font-semibold text-slate-700">Live Alerts</p>
-                  <span className="text-xs text-slate-400">{alerts.length} events · 30 s</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-slate-400">{alerts.length} events · 30 s</span>
+                    <button
+                      onClick={downloadReport}
+                      disabled={downloading}
+                      className="text-xs font-semibold text-blue-600 border border-blue-200 hover:border-blue-400 hover:bg-blue-50 disabled:opacity-50 px-2.5 py-1 rounded-lg transition"
+                    >
+                      {downloading ? 'Exporting…' : '↓ CSV'}
+                    </button>
+                  </div>
                 </div>
                 <div className="overflow-y-auto">
                   {sortedAlerts.length === 0 ? (
@@ -637,7 +657,7 @@ export default function TransportFleetMonitorPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1.5">Radius (meters)</label>
-                <input value={depotRadius} onChange={e => setDepotRadius(e.target.value)} placeholder="100" type="number" min="50"
+                <input value={depotRadius} onChange={e => setDepotRadius(e.target.value)} placeholder="500" type="number" min="50"
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
               {depotErr && <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">{depotErr}</div>}

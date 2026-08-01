@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"log"
 
 	"github.com/anptco/core-api/internal/api"
@@ -34,6 +35,13 @@ func main() {
 			log.Fatalf("secrets: %v", err)
 		}
 		cfg.DatabaseURL = sec.DatabaseURL
+		if sec.QRSigningKey != "" {
+			key, decErr := hex.DecodeString(sec.QRSigningKey)
+			if decErr != nil {
+				log.Fatalf("secrets: qr_signing_key is not valid hex: %v", decErr)
+			}
+			cfg.QRSigningKey = key
+		}
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -79,20 +87,23 @@ func main() {
 		cognitoClient = auth.NewCognitoClient(cognitosvc.NewFromConfig(awsCfg), cfg.UserPoolID)
 	}
 
-	truckRepo      := pgrepo.NewTruckRepository(pool)
-	orderRepo      := pgrepo.NewOrderRepository(pool)
-	tripRepo       := pgrepo.NewTripRepository(pool)
-	onboardingRepo := pgrepo.NewOnboardingRepository(pool)
-	geofenceRepo   := pgrepo.NewGeofenceRepository(pool)
-	workspaceRepo  := pgrepo.NewWorkspaceRepository(pool)
-	adminRepo      := pgrepo.NewAdminRepository(pool)
-	deviceRepo     := pgrepo.NewDeviceRepository(pool)
-	apiKeyRepo     := pgrepo.NewAPIKeyRepository(pool)
+	truckRepo        := pgrepo.NewTruckRepository(pool)
+	orderRepo        := pgrepo.NewOrderRepository(pool)
+	tripRepo         := pgrepo.NewTripRepository(pool)
+	onboardingRepo   := pgrepo.NewOnboardingRepository(pool)
+	geofenceRepo     := pgrepo.NewGeofenceRepository(pool)
+	workspaceRepo    := pgrepo.NewWorkspaceRepository(pool)
+	adminRepo        := pgrepo.NewAdminRepository(pool)
+	deviceRepo       := pgrepo.NewDeviceRepository(pool)
+	apiKeyRepo       := pgrepo.NewAPIKeyRepository(pool)
+	qrCodeRepo       := pgrepo.NewQRCodeRepository(pool)
+	deliveryNoteRepo := pgrepo.NewDeliveryNoteRepository(pool)
 
 	handler := api.NewHandler(
 		pool, truckRepo, orderRepo, tripRepo, onboardingRepo,
 		geofenceRepo, workspaceRepo, adminRepo, deviceRepo, apiKeyRepo,
-		cognitoClient, s3Store, emailSender, zlog, cfg.DevWorkspaceID,
+		qrCodeRepo, deliveryNoteRepo, cognitoClient, s3Store, emailSender, zlog,
+		cfg.DevWorkspaceID, cfg.QRSigningKey,
 	)
 
 	if cfg.DevWorkspaceID != "" {

@@ -25,6 +25,11 @@ type Config struct {
 
 	// Cognito — required for invite API and signup trigger.
 	UserPoolID string
+
+	// QRSigningKey is the raw bytes of the HMAC-SHA256 key used to sign/verify
+	// versioned QR tokens. Populated from Secrets Manager at startup.
+	// Empty disables 4-gate QR verification (falls back to naive truck-id check).
+	QRSigningKey []byte
 }
 
 func Load() (*Config, error) {

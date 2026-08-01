@@ -16,24 +16,33 @@ import (
 	"go.uber.org/zap"
 )
 
+// qrProximityM is the radius within which the truck must be to accept delivery.
+const qrProximityM = 200.0
+
+// qrRecencyLimit is the maximum age of the last telemetry reading.
+const qrRecencyLimit = 5 * 60 // seconds
+
 // Handler is the top-level Lambda request handler. It owns routing, workspace
 // extraction, and role-based authorization.
 type Handler struct {
-	pool           *sqlx.DB
-	trucks         repository.TruckRepository
-	orders         repository.OrderRepository
-	trips          repository.TripRepository
-	onboarding     repository.OnboardingRepository
-	geofences      repository.GeofenceRepository
-	workspaces     repository.WorkspaceRepository
-	admin          repository.AdminRepository
-	devices        repository.DeviceRepository
-	apiKeys        repository.APIKeyRepository
+	pool          *sqlx.DB
+	trucks        repository.TruckRepository
+	orders        repository.OrderRepository
+	trips         repository.TripRepository
+	onboarding    repository.OnboardingRepository
+	geofences     repository.GeofenceRepository
+	workspaces    repository.WorkspaceRepository
+	admin         repository.AdminRepository
+	devices       repository.DeviceRepository
+	apiKeys       repository.APIKeyRepository
+	qrCodes       repository.QRCodeRepository
+	deliveryNotes repository.DeliveryNoteRepository
 	cognito        *auth.CognitoClient // nil when USER_POOL_ID not configured
 	store          *storage.S3Store    // nil when QR_BUCKET not configured
 	email          notify.EmailSender  // noop when SES_FROM_ADDRESS not configured
 	log            *zap.Logger
 	devWorkspaceID string
+	qrKey          []byte // HMAC key for QR token signing; nil disables 4-gate verification
 }
 
 func NewHandler(
@@ -47,11 +56,14 @@ func NewHandler(
 	admin repository.AdminRepository,
 	devices repository.DeviceRepository,
 	apiKeys repository.APIKeyRepository,
+	qrCodes repository.QRCodeRepository,
+	deliveryNotes repository.DeliveryNoteRepository,
 	cognito *auth.CognitoClient,
 	store *storage.S3Store,
 	email notify.EmailSender,
 	log *zap.Logger,
 	devWorkspaceID string,
+	qrKey []byte,
 ) *Handler {
 	return &Handler{
 		pool:           pool,
@@ -64,11 +76,14 @@ func NewHandler(
 		admin:          admin,
 		devices:        devices,
 		apiKeys:        apiKeys,
+		qrCodes:        qrCodes,
+		deliveryNotes:  deliveryNotes,
 		cognito:        cognito,
 		store:          store,
 		email:          email,
 		log:            log,
 		devWorkspaceID: devWorkspaceID,
+		qrKey:          qrKey,
 	}
 }
 
@@ -193,6 +208,13 @@ func (h *Handler) HandleRequest(
 		}
 		return h.handleCreateOrder(ctx, req, workspaceID, claims)
 
+	case method == "GET" && strings.HasPrefix(path, "/v1/orders/") && strings.HasSuffix(path, "/delivery-note"):
+		if !claims.HasAnyRole(auth.RoleClient, auth.RoleSellerManager, auth.RoleTransportAdmin, auth.RolePlatformAdmin) {
+			return jsonError(403, "forbidden"), nil
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/orders/"), "/delivery-note")
+		return h.handleGetOrderDeliveryNote(ctx, workspaceID, claims, id)
+
 	case method == "GET" && strings.HasPrefix(path, "/v1/orders/") && !strings.Contains(strings.TrimPrefix(path, "/v1/orders/"), "/"):
 		if !claims.HasAnyRole(readRoles...) {
 			return jsonError(403, "forbidden"), nil
@@ -206,6 +228,14 @@ func (h *Handler) HandleRequest(
 		}
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/orders/"), "/scan")
 		return h.handleScanOrder(ctx, req, workspaceID, claims, id)
+
+	// 4-gate QR delivery acceptance (CLIENT only, signed versioned token)
+	case method == "POST" && strings.HasPrefix(path, "/v1/orders/") && strings.HasSuffix(path, "/accept-delivery"):
+		if !claims.HasAnyRole(auth.RoleClient, auth.RolePlatformAdmin) {
+			return jsonError(403, "forbidden"), nil
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/orders/"), "/accept-delivery")
+		return h.handleAcceptDelivery(ctx, req, workspaceID, claims, id)
 
 	case method == "PATCH" && strings.HasPrefix(path, "/v1/orders/") && strings.HasSuffix(path, "/accept"):
 		if !claims.HasAnyRole(auth.RoleSellerManager, auth.RolePlatformAdmin) {
