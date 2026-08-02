@@ -63,14 +63,15 @@ export interface ApiTruckPosition {
 }
 
 export interface ApiConnection {
-  id:             string;
-  workspace_id:   string;
-  transporter_id: string; // Cognito sub of the TRANSPORT_ADMIN who requested it
-  seller_code:    string;
-  status:         'PENDING' | 'APPROVED' | 'REJECTED';
-  requested_at:   string;
-  resolved_at?:   string;
-  resolved_by?:   string;
+  id:                string;
+  workspace_id:      string;
+  transporter_id:    string; // Cognito sub of the TRANSPORT_ADMIN who requested it
+  transporter_email: string;
+  seller_code:       string;
+  status:            'PENDING' | 'APPROVED' | 'REJECTED';
+  requested_at:      string;
+  resolved_at?:      string;
+  resolved_by?:      string;
 }
 
 export interface ApiWorkspaceModules {
@@ -311,6 +312,21 @@ export interface ApiDeliveryNote {
   download_url?: string;
 }
 
+export interface ApiSensorRequest {
+  id:                  string;
+  workspace_id:        string;
+  submitted_by:        string;
+  device_imei:         string;
+  registration_no?:    string;
+  status:              'PENDING_SELLER' | 'PENDING_ADMIN' | 'APPROVED' | 'REJECTED';
+  seller_reviewed_by?: string;
+  seller_reviewed_at?: string;
+  admin_reviewed_by?:  string;
+  admin_reviewed_at?:  string;
+  rejection_reason?:   string;
+  created_at:          string;
+}
+
 // ── ERP Client portal types ───────────────────────────────────
 export interface ApiClientMe {
   workspace_id:   string;
@@ -530,8 +546,8 @@ export const api = {
 
   // ── Admin: invite user + onboarding ──────────────────────────
   admin: {
-    inviteUser: (body: { email: string; role: string; workspace_id?: string }) =>
-      apiFetch<{ message: string }>('/v1/users/invite', {
+    inviteUser: (body: { email: string; role: string; workspace_id?: string; workspace_name?: string; workspace_type?: string }) =>
+      apiFetch<{ workspace_id: string; email: string; role: string }>('/v1/users/invite', {
         method: 'POST',
         body:   JSON.stringify(body),
       }),
@@ -660,6 +676,18 @@ export const api = {
     // ── Asset events (admin view, PLATFORM_ADMIN only) ───────
     listEvents: (wsId: string) =>
       apiFetch<ApiAssetEvent[]>(`/admin/v1/workspaces/${wsId}/events`),
+  },
+
+  // ── Sensor integration (2-step approval) ─────────────────────
+  sensorRequests: {
+    list: (status?: string) =>
+      apiFetch<ApiSensorRequest[]>(`/v1/sensor-requests${status ? `?status=${status}` : ''}`),
+    submit: (body: { device_imei: string; registration_no?: string }) =>
+      apiFetch<ApiSensorRequest>('/v1/sensor-requests', { method: 'POST', body: JSON.stringify(body) }),
+    approve: (id: string) =>
+      apiFetch<ApiSensorRequest>(`/v1/sensor-requests/${id}/approve`, { method: 'PATCH' }),
+    reject: (id: string) =>
+      apiFetch<ApiSensorRequest>(`/v1/sensor-requests/${id}/reject`, { method: 'PATCH' }),
   },
 
   // ── Workspace (module flags) ──────────────────────────────────

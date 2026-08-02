@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
 import { getCurrentUser } from '@/src/lib/user-store';
-import { api, type ApiOrder, type ApiDeliveryNote } from '@/src/lib/api';
+import { api, type ApiOrder, type ApiDeliveryNote, type ApiGeofence } from '@/src/lib/api';
 
 const STATUS_COLOR: Record<string, string> = {
   PLACED:             'bg-yellow-100 text-yellow-700',
@@ -26,6 +26,7 @@ export default function ClientOrders() {
   const user   = getCurrentUser();
 
   const [orders,       setOrders]       = useState<ApiOrder[]>([]);
+  const [stations,     setStations]     = useState<Record<string, string>>({});
   const [filter,       setFilter]       = useState<Filter>('ALL');
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState<string | null>(null);
@@ -34,7 +35,9 @@ export default function ClientOrders() {
 
   const load = useCallback(async () => {
     try {
-      setOrders(await api.orders.list());
+      const [orders, stationList] = await Promise.all([api.orders.list(), api.stations.list()]);
+      setOrders(orders);
+      setStations(Object.fromEntries(stationList.map((s: ApiGeofence) => [s.id, s.name])));
       setError(null);
     } catch (e: any) {
       setError(e.message ?? 'Failed to load orders');
@@ -121,7 +124,7 @@ export default function ClientOrders() {
                       <p className="text-xs text-slate-500">
                         {order.volume_liters != null && `${order.volume_liters.toLocaleString()} L`}
                         {order.fuel_type && ` · ${order.fuel_type}`}
-                        {order.destination_station_id && ` · ${order.destination_station_id}`}
+                        {order.destination_station_id && ` · ${stations[order.destination_station_id] ?? order.destination_station_id.slice(-8).toUpperCase()}`}
                       </p>
                       <p className="text-[11px] text-slate-400 mt-0.5">{new Date(order.created_at).toLocaleString()}</p>
                     </div>

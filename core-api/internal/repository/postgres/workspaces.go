@@ -21,7 +21,7 @@ func (r *workspaceRepo) ListSellers(ctx context.Context) ([]*domain.Workspace, e
 	const q = `
 		SELECT id::text, slug, name, type, seller_code, created_at
 		FROM   workspaces
-		WHERE  type = 'SELLER'
+		WHERE  type IN ('SELLER', 'PLATFORM') OR seller_code IS NOT NULL
 		ORDER  BY name`
 	var rows []*domain.Workspace
 	if err := r.db.SelectContext(ctx, &rows, q); err != nil {

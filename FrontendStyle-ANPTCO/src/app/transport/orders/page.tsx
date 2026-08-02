@@ -158,7 +158,7 @@ export default function TransportOrders() {
                           <p className="text-xs text-slate-500">
                             {order.volume_liters != null && `${order.volume_liters.toLocaleString()} L`}
                             {order.fuel_type && ` · ${order.fuel_type}`}
-                            {order.destination_station_id && ` · ${order.destination_station_id}`}
+                            {order.destination_station_id && ` · Stn …${order.destination_station_id.slice(-6).toUpperCase()}`}
                           </p>
                         </div>
 

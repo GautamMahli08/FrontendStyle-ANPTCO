@@ -80,7 +80,7 @@ export default function TransportersPage() {
                 {pending.map(c => (
                   <div key={c.id} className="px-5 py-4 flex items-center justify-between gap-4">
                     <div className="min-w-0">
-                      <p className="text-sm font-mono text-gray-800 truncate">{c.transporter_id}</p>
+                      <p className="text-sm text-gray-800 truncate">{c.transporter_email || c.transporter_id}</p>
                       <p className="text-[11px] text-gray-400 mt-0.5">Requested {new Date(c.requested_at).toLocaleString()}</p>
                     </div>
                     <div className="flex gap-2 flex-shrink-0">
@@ -109,7 +109,7 @@ export default function TransportersPage() {
               <div className="divide-y divide-gray-100">
                 {resolved.map(c => (
                   <div key={c.id} className="px-5 py-3.5 flex items-center justify-between">
-                    <p className="text-sm font-mono text-gray-700">{c.transporter_id}</p>
+                    <p className="text-sm text-gray-700">{c.transporter_email || c.transporter_id}</p>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_COLOR[c.status]}`}>
                       {c.status}
                     </span>

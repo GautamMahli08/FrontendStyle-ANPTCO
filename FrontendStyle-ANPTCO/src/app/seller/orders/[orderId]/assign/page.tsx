@@ -139,7 +139,9 @@ export default function AssignPage() {
                       >
                         <option value="">Select transporter…</option>
                         {transporters.map(c => (
-                          <option key={c.id} value={c.transporter_id}>{c.transporter_id}</option>
+                          <option key={c.id} value={c.transporter_id}>
+                            {c.transporter_email || `Transport Admin (…${c.transporter_id.slice(-8)})`}
+                          </option>
                         ))}
                       </select>
                       <button

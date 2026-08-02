@@ -26,3 +26,12 @@ bluetooth.sensor.value.5
 
 
 https://sp0knxes4d.execute-api.ap-south-1.amazonaws.com/ingest/telemetry
+
+All passwords reset. Here are all your accounts:
+
+Account	Password	Role
+mahligautam83@gmail.com	Anptco@2026!	Platform Admin
+seller@anptco.test	Anptco@2026!	Seller Manager
+btech10294.22@bitmesra.ac.in	Anptco@2026!	Transport Admin
+testclient@anptco.test	Anptco@2026!	Client
+client@anptco.test	Anptco@2026!	ERP Client

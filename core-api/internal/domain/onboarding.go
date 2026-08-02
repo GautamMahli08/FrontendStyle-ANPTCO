@@ -8,14 +8,15 @@ import (
 
 // SellerConnection is a TSP's request to connect with a seller (workspace).
 type SellerConnection struct {
-	ID             uuid.UUID  `db:"id"              json:"id"`
-	WorkspaceID    uuid.UUID  `db:"workspace_id"    json:"workspace_id"`
-	TransporterID  string     `db:"transporter_id"  json:"transporter_id"` // Cognito sub
-	SellerCode     string     `db:"seller_code"     json:"seller_code"`
-	Status         string     `db:"status"          json:"status"`
-	RequestedAt    time.Time  `db:"requested_at"    json:"requested_at"`
-	ResolvedAt     *time.Time `db:"resolved_at"     json:"resolved_at"`
-	ResolvedBy     *string    `db:"resolved_by"     json:"resolved_by"`
+	ID                uuid.UUID  `db:"id"                 json:"id"`
+	WorkspaceID       uuid.UUID  `db:"workspace_id"       json:"workspace_id"`
+	TransporterID     string     `db:"transporter_id"     json:"transporter_id"` // Cognito sub
+	TransporterEmail  string     `db:"transporter_email"  json:"transporter_email"`
+	SellerCode        string     `db:"seller_code"        json:"seller_code"`
+	Status            string     `db:"status"             json:"status"`
+	RequestedAt       time.Time  `db:"requested_at"       json:"requested_at"`
+	ResolvedAt        *time.Time `db:"resolved_at"        json:"resolved_at"`
+	ResolvedBy        *string    `db:"resolved_by"        json:"resolved_by"`
 }
 
 // SensorRequest is a truck integration request awaiting 2-step approval.

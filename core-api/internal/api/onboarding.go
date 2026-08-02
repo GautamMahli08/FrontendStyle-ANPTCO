@@ -41,10 +41,11 @@ func (h *Handler) handleRequestConnection(
 	}
 
 	conn := &domain.SellerConnection{
-		ID:            uuid.New(),
-		WorkspaceID:   sellerWorkspace, // stored against seller's workspace
-		TransporterID: claims.Sub,
-		SellerCode:    body.SellerCode,
+		ID:               uuid.New(),
+		WorkspaceID:      sellerWorkspace, // stored against seller's workspace
+		TransporterID:    claims.Sub,
+		TransporterEmail: claims.Email,
+		SellerCode:       body.SellerCode,
 	}
 	if err := h.onboarding.CreateConnection(ctx, conn); err != nil {
 		h.log.Error("create connection", zap.Error(err))

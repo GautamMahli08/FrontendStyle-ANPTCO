@@ -24,9 +24,9 @@ func NewOnboardingRepository(db *sqlx.DB) repository.OnboardingRepository {
 func (r *onboardingRepo) CreateConnection(ctx context.Context, c *domain.SellerConnection) error {
 	const q = `
 		INSERT INTO seller_connections
-			(id, workspace_id, transporter_id, seller_code, status)
-		VALUES ($1, $2, $3, $4, 'PENDING')`
-	if _, err := r.db.ExecContext(ctx, q, c.ID, c.WorkspaceID, c.TransporterID, c.SellerCode); err != nil {
+			(id, workspace_id, transporter_id, transporter_email, seller_code, status)
+		VALUES ($1, $2, $3, $4, $5, 'PENDING')`
+	if _, err := r.db.ExecContext(ctx, q, c.ID, c.WorkspaceID, c.TransporterID, c.TransporterEmail, c.SellerCode); err != nil {
 		return fmt.Errorf("connections: create: %w", err)
 	}
 	return nil
@@ -34,7 +34,7 @@ func (r *onboardingRepo) CreateConnection(ctx context.Context, c *domain.SellerC
 
 func (r *onboardingRepo) ListConnections(ctx context.Context, workspaceID uuid.UUID) ([]*domain.SellerConnection, error) {
 	const q = `
-		SELECT id, workspace_id, transporter_id, seller_code, status,
+		SELECT id, workspace_id, transporter_id, transporter_email, seller_code, status,
 		       requested_at, resolved_at, resolved_by
 		FROM   seller_connections
 		WHERE  workspace_id = $1
@@ -48,7 +48,7 @@ func (r *onboardingRepo) ListConnections(ctx context.Context, workspaceID uuid.U
 
 func (r *onboardingRepo) GetConnectionByID(ctx context.Context, id uuid.UUID, workspaceID uuid.UUID) (*domain.SellerConnection, error) {
 	const q = `
-		SELECT id, workspace_id, transporter_id, seller_code, status,
+		SELECT id, workspace_id, transporter_id, transporter_email, seller_code, status,
 		       requested_at, resolved_at, resolved_by
 		FROM   seller_connections
 		WHERE  id = $1 AND workspace_id = $2`
