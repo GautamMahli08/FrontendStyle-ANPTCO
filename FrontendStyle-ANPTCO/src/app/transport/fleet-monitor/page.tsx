@@ -18,14 +18,15 @@ const EVENT_CFG: Record<string, { label: string; dot: string; icon: string; urge
   GEOFENCE_ENTER_DEPOT:   { label: 'Arrived at Depot',       dot: 'bg-indigo-500', icon: '🏭' },
   GEOFENCE_EXIT_DEPOT:    { label: 'Left Depot',             dot: 'bg-slate-300',  icon: '🏭' },
   // Asset state transitions
-  FUEL_DRAIN:     { label: 'Fuel Drop / Theft',   dot: 'bg-red-500',    icon: '🚨', urgent: true },
-  BATTERY_OFF:    { label: 'Power Disconnected',   dot: 'bg-orange-500', icon: '⚠️', urgent: true },
-  FUEL_FILL:      { label: 'Fuel Fill',            dot: 'bg-green-500',  icon: '⛽' },
-  IGNITION_ON:    { label: 'Ignition ON',          dot: 'bg-yellow-500', icon: '🔑' },
-  IGNITION_OFF:   { label: 'Ignition OFF',         dot: 'bg-gray-400',   icon: '🔑' },
-  MOVEMENT_START: { label: 'Vehicle Moving',       dot: 'bg-blue-500',   icon: '🚛' },
-  MOVEMENT_STOP:  { label: 'Vehicle Stopped',      dot: 'bg-gray-400',   icon: '🛑' },
-  BATTERY_ON:     { label: 'External Power ON',    dot: 'bg-blue-400',   icon: '🔋' },
+  FUEL_THEFT:     { label: 'FUEL THEFT SUSPECTED',  dot: 'bg-red-600',    icon: '🚨', urgent: true },
+  FUEL_DRAIN:     { label: 'Fuel Drain (en route)', dot: 'bg-orange-400', icon: '⛽' },
+  BATTERY_OFF:    { label: 'Power Disconnected',    dot: 'bg-orange-500', icon: '⚠️', urgent: true },
+  FUEL_FILL:      { label: 'Fuel Fill',             dot: 'bg-green-500',  icon: '⛽' },
+  IGNITION_ON:    { label: 'Ignition ON',           dot: 'bg-yellow-500', icon: '🔑' },
+  IGNITION_OFF:   { label: 'Ignition OFF',          dot: 'bg-gray-400',   icon: '🔑' },
+  MOVEMENT_START: { label: 'Vehicle Moving',        dot: 'bg-blue-500',   icon: '🚛' },
+  MOVEMENT_STOP:  { label: 'Vehicle Stopped',       dot: 'bg-gray-400',   icon: '🛑' },
+  BATTERY_ON:     { label: 'External Power ON',     dot: 'bg-blue-400',   icon: '🔋' },
 };
 
 const WP_DOT = ['bg-blue-500', 'bg-purple-500'];
@@ -284,6 +285,35 @@ export default function TransportFleetMonitorPage() {
             <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">{error}</div>
           )}
 
+          {/* ── Fuel Theft Banner ── */}
+          {(() => {
+            const thefts = sortedAlerts.filter(e => e.event_type === 'FUEL_THEFT');
+            if (thefts.length === 0) return null;
+            return (
+              <div className="bg-red-600 text-white rounded-xl px-5 py-4 flex items-start gap-4 shadow-lg">
+                <span className="text-2xl shrink-0">🚨</span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-base">Fuel Theft Alert — {thefts.length} incident{thefts.length > 1 ? 's' : ''} detected</p>
+                  <p className="text-red-100 text-xs mt-0.5">
+                    Fuel drop detected while ignition was OFF and truck was stationary.
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {thefts.slice(0, 3).map(ev => (
+                      <p key={ev.id} className="text-xs text-red-100 font-mono">
+                        Truck {ev.truck_id.slice(0, 8)}… —{' '}
+                        {ev.value_before != null && ev.value_after != null
+                          ? `${ev.value_before.toFixed(1)} → ${ev.value_after.toFixed(1)} L (−${(ev.value_before - ev.value_after).toFixed(1)} L)`
+                          : ''}
+                        {' · '}{timeAgo(ev.occurred_at)}
+                      </p>
+                    ))}
+                    {thefts.length > 3 && <p className="text-xs text-red-200">+{thefts.length - 3} more</p>}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Stats */}
           <div className="grid grid-cols-4 gap-4">
             {[
@@ -445,104 +475,189 @@ export default function TransportFleetMonitorPage() {
 
               </div>
 
-              {/* Alert feed — sectioned by event type */}
-              <div className="bg-white rounded-xl border border-slate-200 flex flex-col" style={{ maxHeight: 520 }}>
-                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 shrink-0">
-                  <p className="text-sm font-semibold text-slate-700">Live Alerts</p>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-slate-400">{alerts.length} events · 30 s</span>
-                    <button
-                      onClick={downloadReport}
-                      disabled={downloading}
-                      className="text-xs font-semibold text-blue-600 border border-blue-200 hover:border-blue-400 hover:bg-blue-50 disabled:opacity-50 px-2.5 py-1 rounded-lg transition"
-                    >
-                      {downloading ? 'Exporting…' : '↓ CSV'}
-                    </button>
-                  </div>
-                </div>
-                <div className="overflow-y-auto">
-                  {sortedAlerts.length === 0 ? (
-                    <p className="text-xs text-slate-400 text-center py-8">No events yet.</p>
-                  ) : (() => {
-                    // Defined display order: geofence transitions first (most
-                    // relevant for the test flow), then urgent asset events, then rest.
-                    const SECTION_ORDER = [
-                      'GEOFENCE_ENTER_STATION', 'GEOFENCE_EXIT_STATION',
-                      'GEOFENCE_ENTER_DEPOT',   'GEOFENCE_EXIT_DEPOT',
-                      'FUEL_DRAIN', 'BATTERY_OFF',
-                      'FUEL_FILL',
-                      'IGNITION_ON', 'IGNITION_OFF',
-                      'MOVEMENT_START', 'MOVEMENT_STOP',
-                      'BATTERY_ON',
-                    ];
-                    // Group all events by type (already sorted newest-first)
-                    const grouped = new Map<string, ApiAssetEvent[]>();
-                    for (const ev of sortedAlerts) {
-                      if (!grouped.has(ev.event_type)) grouped.set(ev.event_type, []);
-                      grouped.get(ev.event_type)!.push(ev);
-                    }
-                    // Sections in defined order, then any unknown types appended
-                    const sections = [
-                      ...SECTION_ORDER.filter(t => grouped.has(t)),
-                      ...Array.from(grouped.keys()).filter(t => !SECTION_ORDER.includes(t)),
-                    ];
-                    return sections.map(type => {
-                      const evs    = grouped.get(type)!;
-                      const cfg    = EVENT_CFG[type];
-                      const urgent = cfg?.urgent ?? false;
-                      return (
-                        <div key={type}>
-                          {/* Section header */}
-                          <div className={`sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 border-y border-slate-100 ${urgent ? 'bg-red-50' : 'bg-slate-50'}`}>
-                            <span className="text-xs leading-none">{cfg?.icon ?? '📌'}</span>
-                            <span className={`text-[11px] font-semibold ${urgent ? 'text-red-700' : 'text-slate-600'}`}>
-                              {cfg?.label ?? type}
-                            </span>
-                            <span className={`ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full ${urgent ? 'bg-red-200 text-red-800' : 'bg-slate-200 text-slate-600'}`}>
-                              {evs.length}
-                            </span>
-                          </div>
-                          {/* Up to 5 most recent events for this type */}
-                          <div className="divide-y divide-slate-50">
-                            {evs.slice(0, 5).map(ev => (
-                              <div key={ev.id} className={`flex items-start gap-3 px-4 py-2 transition ${urgent ? 'hover:bg-red-50' : 'hover:bg-slate-50'}`}>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <p className="text-[10px] text-slate-400 font-mono">{ev.truck_id.slice(0, 8)}…</p>
-                                    <span className="text-[10px] text-slate-400 shrink-0">{timeAgo(ev.occurred_at)}</span>
-                                  </div>
-                                  {/* Geofence zone name */}
-                                  {ev.geofence_zone && (
-                                    <p className={`text-[10px] font-medium mt-0.5 ${urgent ? 'text-green-700' : 'text-slate-500'}`}>
-                                      {ev.geofence_zone}
-                                    </p>
-                                  )}
-                                  {/* Fuel delta */}
-                                  {ev.value_before != null && ev.value_after != null && (
-                                    <p className="text-[10px] text-slate-500 mt-0.5">
-                                      {ev.value_before.toFixed(1)} → {ev.value_after.toFixed(1)} L
-                                      {type === 'FUEL_DRAIN' && <span className="ml-1 font-semibold text-red-600">(−{(ev.value_before - ev.value_after).toFixed(1)} L)</span>}
-                                      {type === 'FUEL_FILL'  && <span className="ml-1 font-semibold text-green-600">(+{(ev.value_after - ev.value_before).toFixed(1)} L)</span>}
-                                    </p>
-                                  )}
-                                </div>
-                                <span className={`w-1.5 h-1.5 rounded-full mt-1 shrink-0 ${cfg?.dot ?? 'bg-gray-400'}`} />
-                              </div>
-                            ))}
-                            {evs.length > 5 && (
-                              <p className="text-[10px] text-slate-400 text-center py-1.5 italic">
-                                +{evs.length - 5} older events
-                              </p>
-                            )}
-                          </div>
+              {/* ── Fuel Activity (back in right column) ── */}
+              {(() => {
+                const fuelEvents = sortedAlerts.filter(e =>
+                  e.event_type === 'FUEL_FILL' || e.event_type === 'FUEL_DRAIN' || e.event_type === 'FUEL_THEFT'
+                );
+                return (
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col" style={{ maxHeight: 320 }}>
+                    <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b border-slate-100 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm">⛽</span>
+                        <p className="text-xs font-bold text-slate-600 uppercase tracking-wide">Fuel Activity</p>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        fuelEvents.some(e => e.event_type === 'FUEL_THEFT')
+                          ? 'bg-red-100 text-red-700'
+                          : fuelEvents.length > 0 ? 'bg-orange-100 text-orange-600'
+                          : 'bg-slate-100 text-slate-400'
+                      }`}>
+                        {fuelEvents.length} events
+                      </span>
+                    </div>
+                    <div className="overflow-y-auto flex-1">
+                      {fuelEvents.length === 0 ? (
+                        <div className="py-6 flex flex-col items-center gap-1">
+                          <span className="text-xl opacity-20">⛽</span>
+                          <p className="text-[11px] text-slate-400">No fuel events yet</p>
                         </div>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
+                      ) : (
+                        <div className="divide-y divide-slate-50">
+                          {fuelEvents.map(ev => {
+                            const isTheft = ev.event_type === 'FUEL_THEFT';
+                            const isFill  = ev.event_type === 'FUEL_FILL';
+                            const delta   = ev.value_before != null && ev.value_after != null
+                              ? ev.value_after - ev.value_before : null;
+                            return (
+                              <div key={ev.id} className={`flex items-stretch ${isTheft ? 'bg-red-50/60' : 'hover:bg-slate-50'} transition`}>
+                                <div className={`w-[3px] shrink-0 ${isTheft ? 'bg-red-500' : isFill ? 'bg-green-500' : 'bg-orange-400'}`} />
+                                <div className="flex-1 px-3 py-2.5 flex items-center justify-between gap-3 min-w-0">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5 mb-0.5">
+                                      <span className={`text-[9px] font-extrabold px-1.5 py-px rounded uppercase tracking-wide ${
+                                        isTheft ? 'bg-red-600 text-white'
+                                        : isFill ? 'bg-green-100 text-green-700'
+                                        : 'bg-orange-100 text-orange-700'
+                                      }`}>
+                                        {isTheft ? '🚨 THEFT' : isFill ? 'FILL' : 'DRAIN'}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 font-mono truncate">{ev.truck_id.slice(0, 8)}…</span>
+                                    </div>
+                                    {ev.value_before != null && ev.value_after != null && (
+                                      <p className="text-[10px] font-mono text-slate-500">
+                                        {ev.value_before.toFixed(1)}
+                                        <span className="mx-1 text-slate-300">→</span>
+                                        {ev.value_after.toFixed(1)} L
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    {delta != null && (
+                                      <p className={`text-xs font-extrabold leading-none mb-0.5 ${delta > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {delta > 0 ? '+' : '−'}{Math.abs(delta).toFixed(1)} L
+                                      </p>
+                                    )}
+                                    <p className="text-[10px] text-slate-400">{timeAgo(ev.occurred_at)}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
             </div>
+          </div>
+
+          {/* ── Live Alerts — horizontal section grid ── */}
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+                </span>
+                <p className="text-xs font-bold text-slate-600 uppercase tracking-wide">Live Alerts</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-slate-400">{alerts.length} events · 30 s</span>
+                <button
+                  onClick={downloadReport}
+                  disabled={downloading}
+                  className="text-[10px] font-semibold text-blue-600 border border-blue-200 hover:bg-blue-50 disabled:opacity-40 px-2 py-0.5 rounded transition"
+                >
+                  {downloading ? '…' : '↓ CSV'}
+                </button>
+              </div>
+            </div>
+
+            {/* Horizontal grid of event-type columns — gap-px + bg-slate-100 = 1px dividers */}
+            {sortedAlerts.length === 0 ? (
+              <div className="py-10 flex flex-col items-center gap-1.5">
+                <span className="text-2xl opacity-20">📡</span>
+                <p className="text-xs text-slate-400">No events yet</p>
+              </div>
+            ) : (() => {
+              const SECTION_ORDER = [
+                'FUEL_THEFT',
+                'GEOFENCE_ENTER_STATION', 'GEOFENCE_EXIT_STATION',
+                'GEOFENCE_ENTER_DEPOT',   'GEOFENCE_EXIT_DEPOT',
+                'FUEL_DRAIN', 'BATTERY_OFF',
+                'FUEL_FILL',
+                'IGNITION_ON', 'IGNITION_OFF',
+                'MOVEMENT_START', 'MOVEMENT_STOP',
+                'BATTERY_ON',
+              ];
+              const grouped = new Map<string, ApiAssetEvent[]>();
+              for (const ev of sortedAlerts) {
+                if (!grouped.has(ev.event_type)) grouped.set(ev.event_type, []);
+                grouped.get(ev.event_type)!.push(ev);
+              }
+              const sections = [
+                ...SECTION_ORDER.filter(t => grouped.has(t)),
+                ...Array.from(grouped.keys()).filter(t => !SECTION_ORDER.includes(t)),
+              ];
+              return (
+                <div className="grid grid-cols-3 gap-px bg-slate-100">
+                  {sections.map(type => {
+                    const evs    = grouped.get(type)!;
+                    const cfg    = EVENT_CFG[type];
+                    const urgent = cfg?.urgent ?? false;
+                    return (
+                      <div key={type} className={`bg-white ${urgent ? 'bg-red-50/40' : ''}`}>
+                        {/* Column header */}
+                        <div className={`flex items-center gap-1.5 px-3 py-2 border-b border-slate-100 ${urgent ? 'bg-red-50' : 'bg-slate-50'}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cfg?.dot ?? 'bg-slate-300'}`} />
+                          <span className={`text-[10px] font-bold uppercase tracking-wide truncate ${urgent ? 'text-red-700' : 'text-slate-500'}`}>
+                            {cfg?.icon} {cfg?.label ?? type}
+                          </span>
+                          <span className={`ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${urgent ? 'bg-red-200 text-red-800' : 'bg-slate-200 text-slate-500'}`}>
+                            {evs.length}
+                          </span>
+                        </div>
+                        {/* Event rows — show 3 most recent */}
+                        <div className="divide-y divide-slate-50">
+                          {evs.slice(0, 3).map(ev => (
+                            <div key={ev.id} className={`flex items-stretch transition ${urgent ? 'hover:bg-red-50' : 'hover:bg-slate-50'}`}>
+                              <div className={`w-[3px] shrink-0 ${cfg?.dot ?? 'bg-slate-200'}`} />
+                              <div className="flex-1 px-2.5 py-2 min-w-0">
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="text-[10px] font-mono text-slate-500 truncate">{ev.truck_id.slice(0, 8)}…</span>
+                                  <span className="text-[9px] text-slate-400 shrink-0">{timeAgo(ev.occurred_at)}</span>
+                                </div>
+                                {ev.geofence_zone && (
+                                  <p className="text-[10px] font-medium text-slate-600 mt-0.5 truncate">{ev.geofence_zone}</p>
+                                )}
+                                {(type === 'FUEL_FILL' || type === 'FUEL_DRAIN' || type === 'FUEL_THEFT') &&
+                                  ev.value_before != null && ev.value_after != null && (
+                                  <p className="text-[10px] font-mono text-slate-500 mt-0.5">
+                                    {ev.value_before.toFixed(1)}→{ev.value_after.toFixed(1)} L
+                                    <span className={`ml-1 font-bold ${type === 'FUEL_FILL' ? 'text-green-600' : 'text-red-600'}`}>
+                                      {type === 'FUEL_FILL'
+                                        ? `+${(ev.value_after - ev.value_before).toFixed(1)}`
+                                        : `−${(ev.value_before - ev.value_after).toFixed(1)}`}L
+                                    </span>
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                          {evs.length > 3 && (
+                            <p className="text-[9px] text-slate-400 text-center py-1.5 italic px-2">+{evs.length - 3} more</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Truck list with fuel bars */}

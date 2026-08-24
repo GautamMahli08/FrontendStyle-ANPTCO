@@ -85,6 +85,23 @@ function InvalidateSize() {
   return null;
 }
 
+// The 5s transform transition that makes markers glide between GPS poll updates
+// also fires during zoom, causing markers to slide to their repositioned screen
+// coordinates instead of snapping instantly. Adding `map-zooming` to the
+// container during zoom disables the transition for that window only.
+function ZoomTransitionGuard() {
+  const map = useMap();
+  useEffect(() => {
+    const el = map.getContainer();
+    const onStart = () => el.classList.add('map-zooming');
+    const onEnd   = () => el.classList.remove('map-zooming');
+    map.on('zoomstart',  onStart);
+    map.on('zoomend',    onEnd);
+    return () => { map.off('zoomstart', onStart); map.off('zoomend', onEnd); };
+  }, [map]);
+  return null;
+}
+
 // Re-fits map to show the selected truck + destination whenever the destination changes.
 // wpKey is a stable string so this won't re-run on every 5-second truck poll.
 function FitRoute({
@@ -297,11 +314,13 @@ export default function FleetMap({
 
   return (
     <div style={{ position: 'relative' }}>
-      {/* Leaflet moves markers via CSS transform. A linear transition matching
-          the poll interval (5 s) makes each truck glide to the new GPS fix
-          instead of jumping. Only fires on subsequent setLatLng calls —
-          initial placement is instant. */}
-      <style>{`.leaflet-marker-icon,.leaflet-marker-shadow{transition:transform 5s linear!important}`}</style>
+      {/* Glide markers between 5-second GPS poll updates. The .map-zooming
+          guard disables the transition during zoom so markers snap immediately
+          to their repositioned screen coordinates instead of sliding there. */}
+      <style>{`
+        .leaflet-marker-icon,.leaflet-marker-shadow{transition:transform 5s linear!important}
+        .map-zooming .leaflet-marker-icon,.map-zooming .leaflet-marker-shadow{transition:none!important}
+      `}</style>
 
       <MapContainer
         center={centre}
@@ -320,6 +339,7 @@ export default function FleetMap({
         />
         <GetMapRef mapRef={mapRef} />
         <InvalidateSize />
+        <ZoomTransitionGuard />
         <InitialFit markers={markers} />
         <FitRoute markers={markers} waypoints={waypoints} selectedTruckId={selectedTruckId} />
         {onMapClick && <MapClickHandler onMapClick={onMapClick} />}

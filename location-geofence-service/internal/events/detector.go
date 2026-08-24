@@ -59,7 +59,15 @@ func Detect(
 			if delta >= fuelChangeLiters {
 				events = append(events, mk(domain.AssetEventFuelFill, f64(*prevFuel), f64(*newFuel)))
 			} else if delta <= -fuelChangeLiters {
-				events = append(events, mk(domain.AssetEventFuelDrain, f64(*prevFuel), f64(*newFuel)))
+				// Theft: drain while ignition off AND truck not moving.
+				// Normal consumption happens with ignition on and speed > 0.
+				ignOff := r.IgnitionOn == nil || !*r.IgnitionOn
+				stationary := r.Speed == nil || *r.Speed < movementSpeedKmh
+				if ignOff && stationary {
+					events = append(events, mk(domain.AssetEventFuelTheft, f64(*prevFuel), f64(*newFuel)))
+				} else {
+					events = append(events, mk(domain.AssetEventFuelDrain, f64(*prevFuel), f64(*newFuel)))
+				}
 			}
 		}
 	}

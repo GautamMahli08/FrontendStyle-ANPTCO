@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/anptco/core-api/internal/db"
@@ -282,6 +283,25 @@ func (h *Handler) handleGetTrip(
 		return jsonError(404, "trip not found"), nil
 	}
 	return jsonOK(trip)
+}
+
+func (h *Handler) handleDeleteTrip(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	rawID string,
+) (events.APIGatewayV2HTTPResponse, error) {
+	tripID, err := uuid.Parse(strings.TrimSpace(rawID))
+	if err != nil {
+		return jsonError(400, "invalid trip id"), nil
+	}
+	if err := h.trips.Delete(ctx, tripID, workspaceID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return jsonError(404, "trip not found"), nil
+		}
+		h.log.Error("delete trip", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+	return jsonOK(map[string]string{"id": tripID.String()})
 }
 
 // handleScanTrip processes a QR scan at delivery: ARRIVED → DELIVERY_ACCEPTED.

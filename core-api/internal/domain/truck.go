@@ -61,6 +61,16 @@ type TruckPosition struct {
 	CompartmentFuel JSONB       `db:"compartment_fuel"  json:"compartment_fuel,omitempty"`
 }
 
+// FuelReading is one time-stamped fuel snapshot from truck_telemetry,
+// returned by GET /v1/trucks/{id}/fuel-history.
+type FuelReading struct {
+	Timestamp       time.Time          `db:"timestamp"           json:"timestamp"`
+	CompartmentFuel map[string]float64 `db:"-"                   json:"compartment_fuel,omitempty"`
+	TotalFuelLiters *float64           `db:"total_fuel_liters"   json:"total_fuel_liters,omitempty"`
+	// rawSensors is populated by the DB scan and decoded into CompartmentFuel.
+	RawSensors JSONB `db:"compartment_sensors" json:"-"`
+}
+
 // TruckWithPosition is the combined response returned by GET /v1/trucks.
 type TruckWithPosition struct {
 	ID              uuid.UUID   `db:"id"                json:"id"`

@@ -30,6 +30,11 @@ type Config struct {
 	// versioned QR tokens. Populated from Secrets Manager at startup.
 	// Empty disables 4-gate QR verification (falls back to naive truck-id check).
 	QRSigningKey []byte
+
+	// OrderWebhookSecret is the HMAC-SHA256 shared secret used to verify
+	// inbound order-sync webhook payloads from the external ordering system.
+	// Empty disables signature verification (dev/testing only).
+	OrderWebhookSecret string
 }
 
 func Load() (*Config, error) {
@@ -42,8 +47,9 @@ func Load() (*Config, error) {
 		QRBucket:       os.Getenv("QR_BUCKET"),
 		KYCBucket:      os.Getenv("KYC_BUCKET"),
 		CDNBaseURL:     os.Getenv("CDN_BASE_URL"),
-		SESFromAddress: os.Getenv("SES_FROM_ADDRESS"),
-		UserPoolID:     os.Getenv("USER_POOL_ID"),
+		SESFromAddress:     os.Getenv("SES_FROM_ADDRESS"),
+		UserPoolID:         os.Getenv("USER_POOL_ID"),
+		OrderWebhookSecret: os.Getenv("ORDER_WEBHOOK_SECRET"),
 	}
 
 	if secretsARN == "" {

@@ -62,19 +62,36 @@ func NewService(
 	}
 }
 
+// EvalContext carries the geofence membership context after a reading is
+// evaluated. The ingestion service passes this to the monitoring subsystem so
+// alert detectors know whether the truck is inside an approved zone.
+type EvalContext struct {
+	InsideDepot    bool
+	InsideDelivery bool
+	ActiveTripID   *uuid.UUID
+}
+
 // EvaluateReading checks whether the truck's latest position crosses any
 // relevant geofence boundary (active-order destination and/or depot).
 // It is only called when the location module confirms the reading advanced
 // truck_live_state (i.e. it is not stale).
-func (s *Service) EvaluateReading(ctx context.Context, truck *domain.Truck, lat, lon float64, ts time.Time) error {
+// Returns an EvalContext describing current geofence membership so the
+// monitoring subsystem can make context-aware alert decisions.
+func (s *Service) EvaluateReading(ctx context.Context, truck *domain.Truck, lat, lon float64, ts time.Time) (*EvalContext, error) {
 	trip, err := s.geofences.FindActiveTripForTruck(ctx, truck.ID)
 	if err != nil {
-		return fmt.Errorf("find active trip: %w", err)
+		return nil, fmt.Errorf("find active trip: %w", err)
 	}
 
 	depot, err := s.geofences.FindDepotByWorkspace(ctx, truck.WorkspaceID)
 	if err != nil {
-		return fmt.Errorf("find depot: %w", err)
+		return nil, fmt.Errorf("find depot: %w", err)
+	}
+
+	evalCtx := &EvalContext{}
+	if trip != nil {
+		tripID := trip.TripID
+		evalCtx.ActiveTripID = &tripID
 	}
 
 	if trip != nil {
@@ -93,9 +110,11 @@ func (s *Service) EvaluateReading(ctx context.Context, truck *domain.Truck, lat,
 			Longitude:    trip.DestLon,
 			RadiusMeters: destRadius,
 		}
-		if err := s.evaluateZone(ctx, truck, trip, lat, lon, ts, stationFence); err != nil {
-			return fmt.Errorf("evaluate station zone: %w", err)
+		inside, err := s.evaluateZone(ctx, truck, trip, lat, lon, ts, stationFence)
+		if err != nil {
+			return nil, fmt.Errorf("evaluate station zone: %w", err)
 		}
+		evalCtx.InsideDelivery = inside
 	}
 
 	if depot == nil {
@@ -107,15 +126,18 @@ func (s *Service) EvaluateReading(ctx context.Context, truck *domain.Truck, lat,
 		if depot.RadiusMeters == 0 {
 			depot.RadiusMeters = int(s.depotRadiusM)
 		}
-		if err := s.evaluateZone(ctx, truck, trip, lat, lon, ts, depot); err != nil {
-			return fmt.Errorf("evaluate depot zone: %w", err)
+		inside, err := s.evaluateZone(ctx, truck, trip, lat, lon, ts, depot)
+		if err != nil {
+			return nil, fmt.Errorf("evaluate depot zone: %w", err)
 		}
+		evalCtx.InsideDepot = inside
 	}
 
-	return nil
+	return evalCtx, nil
 }
 
 // evaluateZone detects an inside/outside transition for a single zone.
+// Returns whether the truck is currently inside the zone, plus any error.
 // The state read (GetState) runs outside the transaction; the state write,
 // event insert, and order mutation run atomically inside one.
 // Any notification is published only after the transaction commits.
@@ -126,14 +148,14 @@ func (s *Service) evaluateZone(
 	lat, lon float64,
 	ts time.Time,
 	fence *domain.Geofence,
-) error {
+) (bool, error) {
 	radius := float64(fence.RadiusMeters)
 	dist := DistanceMeters(lat, lon, fence.Latitude, fence.Longitude)
 	insideNow := dist <= radius
 
 	wasInside, err := s.geofences.GetState(ctx, truck.ID, fence.ID)
 	if err != nil {
-		return fmt.Errorf("get state for fence %s: %w", fence.ID, err)
+		return false, fmt.Errorf("get state for fence %s: %w", fence.ID, err)
 	}
 
 	var evtType domain.EventType
@@ -143,7 +165,7 @@ func (s *Service) evaluateZone(
 	case !insideNow && wasInside:
 		evtType = domain.EventTypeExit
 	default:
-		return nil // no transition — already in the same state
+		return insideNow, nil // no transition — already in the same state
 	}
 
 	evt := buildEvent(truck, trip, fence, evtType, lat, lon, ts)
@@ -175,12 +197,12 @@ func (s *Service) evaluateZone(
 		pending = n
 		return nil
 	}); err != nil {
-		return err
+		return false, err
 	}
 
 	// Transaction committed — publish notification best-effort.
 	s.publishNotification(ctx, pending)
-	return nil
+	return insideNow, nil
 }
 
 // pendingNotification captures what lifecycle notification (if any) should be

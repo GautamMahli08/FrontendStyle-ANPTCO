@@ -52,6 +52,12 @@ export interface ApiTruck {
   compartment_fuel?:  Record<string, number>;
 }
 
+export interface ApiFuelReading {
+  timestamp:        string;
+  compartment_fuel?: Record<string, number>;
+  total_fuel_liters?: number;
+}
+
 export interface ApiTruckPosition {
   truck_id:           string;
   latitude?:          number;
@@ -522,6 +528,8 @@ export const api = {
         method: 'PATCH',
         body:   JSON.stringify({ compartment_fuel: compartmentFuel }),
       }),
+    fuelHistory: (id: string, fromUnix: number, toUnix: number) =>
+      apiFetch<ApiFuelReading[]>(`/v1/trucks/${id}/fuel-history?from=${fromUnix}&to=${toUnix}`),
   },
 
   // ── Seller ↔ Transporter connections ──────────────────────────
@@ -725,6 +733,8 @@ export const api = {
     list: () => apiFetch<ApiTrip[]>('/v1/trips'),
 
     get: (id: string) => apiFetch<ApiTrip>(`/v1/trips/${id}`),
+
+    delete: (id: string) => apiFetch<{ id: string }>(`/v1/trips/${id}`, { method: 'DELETE' }),
 
     // ARRIVED → DELIVERY_ACCEPTED (QR scan at delivery)
     scan: (id: string, fuelDelivered?: Record<string, number>) =>

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/anptco/core-api/internal/domain"
 	"github.com/google/uuid"
@@ -45,4 +46,8 @@ type TruckRepository interface {
 	// SetFuel updates the compartment fuel snapshot in truck_live_state.
 	// Unlike SeedPosition this always overwrites regardless of last_message_at.
 	SetFuel(ctx context.Context, truckID, workspaceID uuid.UUID, compartmentFuel map[string]float64, totalLiters float64) error
+
+	// FuelHistory returns time-stamped fuel readings from truck_telemetry for
+	// the given truck within [from, to], ordered oldest-first, capped at 5000 rows.
+	FuelHistory(ctx context.Context, truckID, workspaceID uuid.UUID, from, to time.Time) ([]*domain.FuelReading, error)
 }

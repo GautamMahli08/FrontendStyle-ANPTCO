@@ -10,6 +10,7 @@ import (
 	"github.com/anptco/location-geofence-service/internal/ingestion"
 	"github.com/anptco/location-geofence-service/internal/location"
 	"github.com/anptco/location-geofence-service/internal/logger"
+	"github.com/anptco/location-geofence-service/internal/monitoring"
 	"github.com/anptco/location-geofence-service/internal/notify"
 	pgrepo "github.com/anptco/location-geofence-service/internal/repository/postgres"
 	"github.com/anptco/location-geofence-service/internal/secrets"
@@ -76,6 +77,8 @@ func main() {
 	geofenceRepo := pgrepo.NewGeofenceRepository(pool)
 	eventRepo := pgrepo.NewGeofenceEventRepository(pool)
 	tripRepo := pgrepo.NewTripRepository(pool)
+	alertRepo := pgrepo.NewAlertRepository(pool)
+	stopRepo := pgrepo.NewStopRepository(pool)
 	tx := pgrepo.NewTransactor(pool)
 
 	// ── Domain services ──────────────────────────────────────────────────────
@@ -86,9 +89,10 @@ func main() {
 		cfg.GeofenceDestRadiusM, cfg.GeofenceDepotRadiusM,
 		notifier,
 	)
+	monitoringSvc := monitoring.NewService(alertRepo, stopRepo, zlog)
 
 	// ── Lambda handler ───────────────────────────────────────────────────────
-	ingestSvc := ingestion.NewService(locationSvc, geofenceSvc, zlog)
+	ingestSvc := ingestion.NewService(locationSvc, geofenceSvc, monitoringSvc, zlog)
 	handler := ingestion.NewHandler(ingestSvc, cfg.FlespiWebhookSecret, cfg.DefaultDeviceIdent, zlog)
 
 	lambda.Start(withRequestLog(handler, zlog))

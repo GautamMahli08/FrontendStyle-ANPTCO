@@ -44,11 +44,12 @@ func NewService(
 	}
 }
 
-// ProcessResult carries what the geofence module needs from a successful
-// location step: the resolved truck and whether live state was written.
+// ProcessResult carries what the geofence and monitoring modules need from a
+// successful location step.
 type ProcessResult struct {
-	Truck   *domain.Truck
-	Updated bool // false when the reading was stale — geofence eval should be skipped
+	Truck     *domain.Truck
+	PrevState *domain.TruckLiveState // live state before this reading was applied
+	Updated   bool                   // false when reading was stale — skip geofence eval
 }
 
 // ProcessMessage runs the location + event-detection steps for a single telemetry reading.
@@ -108,7 +109,7 @@ func (s *Service) ProcessMessage(ctx context.Context, r *domain.TelemetryReading
 		}
 	}
 
-	return &ProcessResult{Truck: truck, Updated: updated}, nil
+	return &ProcessResult{Truck: truck, PrevState: prev, Updated: updated}, nil
 }
 
 func buildTelemetry(truck *domain.Truck, r *domain.TelemetryReading) *domain.TruckTelemetry {

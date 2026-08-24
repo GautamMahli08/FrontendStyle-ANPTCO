@@ -132,6 +132,18 @@ func (r *tripRepo) GetByWorkspaceAndOrderRef(ctx context.Context, workspaceID uu
 	return &t, nil
 }
 
+func (r *tripRepo) Delete(ctx context.Context, id, workspaceID uuid.UUID) error {
+	const q = `DELETE FROM trips WHERE id = $1 AND workspace_id = $2`
+	res, err := r.db.ExecContext(ctx, q, id, workspaceID)
+	if err != nil {
+		return fmt.Errorf("trips: delete %s: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 // nullJSON returns nil when b is empty so the DB column stays NULL.
 func nullJSON(b domain.JSONB) interface{} {
 	if len(b) == 0 {

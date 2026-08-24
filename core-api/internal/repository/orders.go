@@ -62,3 +62,6 @@ type OrderRepository interface {
 // ErrWrongStatus is returned when AdvanceStatus finds the order in an
 // unexpected state (i.e. the transition is not valid from the current status).
 var ErrWrongStatus = fmt.Errorf("order is not in the expected status for this transition")
+
+// ErrNotFound is returned when a delete or update targets a row that does not exist.
+var ErrNotFound = fmt.Errorf("not found")

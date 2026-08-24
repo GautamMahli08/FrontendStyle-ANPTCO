@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/anptco/core-api/internal/auth"
 	"github.com/anptco/core-api/internal/db"
@@ -265,4 +267,59 @@ func (h *Handler) handleGetTruckPosition(
 		return jsonError(500, "internal error"), nil
 	}
 	return jsonOK(pos)
+}
+
+// GET /v1/trucks/{id}/fuel-history?from=<unix_sec>&to=<unix_sec>
+// Returns time-series compartment_sensors readings from truck_telemetry.
+func (h *Handler) handleFuelHistory(
+	ctx context.Context,
+	req events.APIGatewayV2HTTPRequest,
+	workspaceID uuid.UUID,
+	rawID string,
+) (events.APIGatewayV2HTTPResponse, error) {
+	truckID, err := uuid.Parse(strings.TrimSpace(rawID))
+	if err != nil {
+		return jsonError(400, "invalid truck id"), nil
+	}
+
+	parseUnix := func(key string) (time.Time, bool) {
+		s := req.QueryStringParameters[key]
+		if s == "" {
+			return time.Time{}, false
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return time.Unix(n, 0).UTC(), true
+	}
+
+	from, ok := parseUnix("from")
+	if !ok {
+		from = time.Now().UTC().Add(-24 * time.Hour)
+	}
+	to, ok := parseUnix("to")
+	if !ok {
+		to = time.Now().UTC()
+	}
+
+	// Verify the truck belongs to this workspace before serving telemetry.
+	truck, err := h.trucks.GetByID(ctx, truckID, workspaceID)
+	if err != nil {
+		h.log.Error("fuel history: get truck", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+	if truck == nil {
+		return jsonError(404, "truck not found"), nil
+	}
+
+	readings, err := h.trucks.FuelHistory(ctx, truckID, workspaceID, from, to)
+	if err != nil {
+		h.log.Error("fuel history: query", zap.Error(err))
+		return jsonError(500, "internal error"), nil
+	}
+	if readings == nil {
+		readings = []*domain.FuelReading{}
+	}
+	return jsonOK(readings)
 }

@@ -35,4 +35,8 @@ type TripRepository interface {
 	// or nil if none exists. Used by handleDispatchTrip to detect duplicate dispatches
 	// and return 409 before inserting a duplicate row.
 	GetByWorkspaceAndOrderRef(ctx context.Context, workspaceID uuid.UUID, orderRef string) (*domain.Trip, error)
+
+	// Delete removes a trip from the workspace. Returns ErrNotFound if the trip
+	// does not exist in this workspace.
+	Delete(ctx context.Context, id, workspaceID uuid.UUID) error
 }

@@ -37,12 +37,14 @@ type Handler struct {
 	apiKeys       repository.APIKeyRepository
 	qrCodes       repository.QRCodeRepository
 	deliveryNotes repository.DeliveryNoteRepository
+	syncedOrders  repository.SyncedOrderRepository
 	cognito        *auth.CognitoClient // nil when USER_POOL_ID not configured
 	store          *storage.S3Store    // nil when QR_BUCKET not configured
 	email          notify.EmailSender  // noop when SES_FROM_ADDRESS not configured
 	log            *zap.Logger
-	devWorkspaceID string
-	qrKey          []byte // HMAC key for QR token signing; nil disables 4-gate verification
+	devWorkspaceID     string
+	qrKey              []byte // HMAC key for QR token signing; nil disables 4-gate verification
+	orderWebhookSecret string // HMAC secret for inbound order webhook; empty = no verification
 }
 
 func NewHandler(
@@ -58,32 +60,36 @@ func NewHandler(
 	apiKeys repository.APIKeyRepository,
 	qrCodes repository.QRCodeRepository,
 	deliveryNotes repository.DeliveryNoteRepository,
+	syncedOrders repository.SyncedOrderRepository,
 	cognito *auth.CognitoClient,
 	store *storage.S3Store,
 	email notify.EmailSender,
 	log *zap.Logger,
 	devWorkspaceID string,
 	qrKey []byte,
+	orderWebhookSecret string,
 ) *Handler {
 	return &Handler{
-		pool:           pool,
-		trucks:         trucks,
-		orders:         orders,
-		trips:          trips,
-		onboarding:     onboarding,
-		geofences:      geofences,
-		workspaces:     workspaces,
-		admin:          admin,
-		devices:        devices,
-		apiKeys:        apiKeys,
-		qrCodes:        qrCodes,
-		deliveryNotes:  deliveryNotes,
-		cognito:        cognito,
-		store:          store,
-		email:          email,
-		log:            log,
-		devWorkspaceID: devWorkspaceID,
-		qrKey:          qrKey,
+		pool:               pool,
+		trucks:             trucks,
+		orders:             orders,
+		trips:              trips,
+		onboarding:         onboarding,
+		geofences:          geofences,
+		workspaces:         workspaces,
+		admin:              admin,
+		devices:            devices,
+		apiKeys:            apiKeys,
+		qrCodes:            qrCodes,
+		deliveryNotes:      deliveryNotes,
+		syncedOrders:       syncedOrders,
+		cognito:            cognito,
+		store:              store,
+		email:              email,
+		log:                log,
+		devWorkspaceID:     devWorkspaceID,
+		qrKey:              qrKey,
+		orderWebhookSecret: orderWebhookSecret,
 	}
 }
 
@@ -121,6 +127,11 @@ func (h *Handler) HandleRequest(
 	// ERP read endpoints — dispatch API key auth, CORS-enabled for erp-console.
 	if strings.HasPrefix(path, "/v1/erp/") {
 		return h.routeERP(ctx, method, path, req)
+	}
+
+	// Inbound order webhook — HMAC-verified, no Cognito JWT required.
+	if method == "POST" && path == "/v1/webhooks/orders" {
+		return h.handleOrderSyncWebhook(ctx, req)
 	}
 
 	workspaceID, claims, err := h.extractAuth(req)
@@ -181,6 +192,13 @@ func (h *Handler) HandleRequest(
 		}
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/trucks/"), "/position")
 		return h.handleGetTruckPosition(ctx, workspaceID, id)
+
+	case method == "GET" && strings.HasPrefix(path, "/v1/trucks/") && strings.HasSuffix(path, "/fuel-history"):
+		if !claims.HasAnyRole(auth.RoleTransportAdmin, auth.RolePlatformAdmin) {
+			return jsonError(403, "forbidden"), nil
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/trucks/"), "/fuel-history")
+		return h.handleFuelHistory(ctx, req, workspaceID, id)
 
 	case method == "GET" && strings.HasPrefix(path, "/v1/trucks/") && strings.HasSuffix(path, "/qr"):
 		if !claims.HasAnyRole(readRoles...) {
@@ -387,6 +405,14 @@ func (h *Handler) HandleRequest(
 		}
 		id := strings.TrimPrefix(path, "/v1/trips/")
 		return h.handleGetTrip(ctx, workspaceID, id)
+
+	case method == "DELETE" && strings.HasPrefix(path, "/v1/trips/") &&
+		!strings.Contains(strings.TrimPrefix(path, "/v1/trips/"), "/"):
+		if !claims.HasAnyRole(auth.RoleTransportAdmin, auth.RolePlatformAdmin) {
+			return jsonError(403, "forbidden"), nil
+		}
+		id := strings.TrimPrefix(path, "/v1/trips/")
+		return h.handleDeleteTrip(ctx, workspaceID, id)
 
 	case method == "PATCH" && strings.HasPrefix(path, "/v1/trips/") && strings.HasSuffix(path, "/scan"):
 		if !claims.HasAnyRole(scanRoles...) {

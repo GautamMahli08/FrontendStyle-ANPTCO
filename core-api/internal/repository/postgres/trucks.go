@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/anptco/core-api/internal/domain"
 	"github.com/anptco/core-api/internal/repository"
@@ -202,4 +203,38 @@ func (r *truckRepo) SetFuel(ctx context.Context, truckID, workspaceID uuid.UUID,
 		return fmt.Errorf("trucks: set fuel for %s: %w", truckID, err)
 	}
 	return nil
+}
+
+func (r *truckRepo) FuelHistory(ctx context.Context, truckID, workspaceID uuid.UUID, from, to time.Time) ([]*domain.FuelReading, error) {
+	const q = `
+		SELECT timestamp, compartment_sensors, total_fuel_liters
+		FROM   truck_telemetry
+		WHERE  truck_id     = $1
+		  AND  workspace_id = $2
+		  AND  timestamp   >= $3
+		  AND  timestamp   <  $4
+		  AND  (compartment_sensors IS NOT NULL OR total_fuel_liters IS NOT NULL)
+		ORDER  BY timestamp ASC
+		LIMIT  5000`
+
+	rows, err := r.db.QueryxContext(ctx, q, truckID, workspaceID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("trucks: fuel history for %s: %w", truckID, err)
+	}
+	defer rows.Close()
+
+	var out []*domain.FuelReading
+	for rows.Next() {
+		var fr domain.FuelReading
+		if err := rows.StructScan(&fr); err != nil {
+			return nil, fmt.Errorf("trucks: fuel history scan: %w", err)
+		}
+		if len(fr.RawSensors) > 0 {
+			if err := json.Unmarshal(fr.RawSensors, &fr.CompartmentFuel); err != nil {
+				fr.CompartmentFuel = nil
+			}
+		}
+		out = append(out, &fr)
+	}
+	return out, rows.Err()
 }

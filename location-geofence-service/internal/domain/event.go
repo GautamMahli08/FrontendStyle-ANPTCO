@@ -11,6 +11,7 @@ type AssetEventType string
 const (
 	AssetEventFuelFill      AssetEventType = "FUEL_FILL"
 	AssetEventFuelDrain     AssetEventType = "FUEL_DRAIN"
+	AssetEventFuelTheft     AssetEventType = "FUEL_THEFT" // drain while stationary/ignition-off → suspected theft
 	AssetEventBatteryOn     AssetEventType = "BATTERY_ON"
 	AssetEventBatteryOff    AssetEventType = "BATTERY_OFF"
 	AssetEventIgnitionOn    AssetEventType = "IGNITION_ON"

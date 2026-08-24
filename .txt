@@ -35,3 +35,7 @@ seller@anptco.test	Anptco@2026!	Seller Manager
 btech10294.22@bitmesra.ac.in	Anptco@2026!	Transport Admin
 testclient@anptco.test	Anptco@2026!	Client
 client@anptco.test	Anptco@2026!	ERP Client
+
+
+Configrator urls
+209.58.168.101      6034

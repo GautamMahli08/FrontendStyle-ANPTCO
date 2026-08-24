@@ -98,12 +98,14 @@ func main() {
 	apiKeyRepo       := pgrepo.NewAPIKeyRepository(pool)
 	qrCodeRepo       := pgrepo.NewQRCodeRepository(pool)
 	deliveryNoteRepo := pgrepo.NewDeliveryNoteRepository(pool)
+	syncedOrderRepo  := pgrepo.NewSyncedOrderRepository(pool)
 
 	handler := api.NewHandler(
 		pool, truckRepo, orderRepo, tripRepo, onboardingRepo,
 		geofenceRepo, workspaceRepo, adminRepo, deviceRepo, apiKeyRepo,
-		qrCodeRepo, deliveryNoteRepo, cognitoClient, s3Store, emailSender, zlog,
-		cfg.DevWorkspaceID, cfg.QRSigningKey,
+		qrCodeRepo, deliveryNoteRepo, syncedOrderRepo,
+		cognitoClient, s3Store, emailSender, zlog,
+		cfg.DevWorkspaceID, cfg.QRSigningKey, cfg.OrderWebhookSecret,
 	)
 
 	if cfg.DevWorkspaceID != "" {
