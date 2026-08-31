@@ -498,6 +498,8 @@ export const api = {
       longitude:     number;
       radius_meters: number;
     }) => apiFetch<ApiGeofence>('/v1/stations', { method: 'POST', body: JSON.stringify(body) }),
+
+    delete: (id: string) => apiFetch<void>(`/v1/stations/${id}`, { method: 'DELETE' }),
   },
 
   // ── Depots (TRANSPORT_ADMIN geofences) ───────────────────────

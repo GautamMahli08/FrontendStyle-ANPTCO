@@ -7,6 +7,7 @@ import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
 import { getCurrentUser } from '@/src/lib/user-store';
 import { api, type ApiAssetEvent, type ApiFuelReading, type ApiTruck } from '@/src/lib/api';
+import { loadDestinations, loadActiveDestId, getActiveDest } from '@/src/lib/saved-destinations';
 
 const FuelChart = dynamic(() => import('@/src/components/FuelChart'), { ssr: false });
 
@@ -15,9 +16,36 @@ const LOG_TYPES = ['FUEL_FILL', 'FUEL_DRAIN', 'FUEL_THEFT'];
 const EVENT_LABEL: Record<string, string> = {
   FUEL_FILL:  'Fuel Filled',
   FUEL_DRAIN: 'Fuel Drained',
-  FUEL_THEFT: 'Fuel Theft',
-  IGNITION_ON:  'Engine On',
-  IGNITION_OFF: 'Engine Off',
+  FUEL_THEFT: 'Fuel Theft Alert',
+  IGNITION_ON:  'Engine Started',
+  IGNITION_OFF: 'Engine Stopped',
+  BATTERY_ON:   'Power Connected',
+  BATTERY_OFF:  'Power Disconnected',
+  MOVEMENT_START: 'Vehicle Moving',
+  MOVEMENT_STOP:  'Vehicle Stopped',
+  GEOFENCE_ENTER_DEPOT:   'Returned to Depot',
+  GEOFENCE_EXIT_DEPOT:    'Left Depot',
+  GEOFENCE_ENTER_STATION: 'Reached Destination',
+  GEOFENCE_EXIT_STATION:  'Left Destination',
+  GEOFENCE_ENTER: 'Entered Geofence',
+  GEOFENCE_EXIT:  'Exited Geofence',
+};
+const EVENT_ICON: Record<string, string> = {
+  FUEL_FILL:  '⛽',
+  FUEL_DRAIN: '🪣',
+  FUEL_THEFT: '🚨',
+  IGNITION_ON:  '🔑',
+  IGNITION_OFF: '🔑',
+  BATTERY_ON:   '🔌',
+  BATTERY_OFF:  '🔌',
+  MOVEMENT_START: '▶',
+  MOVEMENT_STOP:  '⏸',
+  GEOFENCE_ENTER_DEPOT:   '🏭',
+  GEOFENCE_EXIT_DEPOT:    '🏭',
+  GEOFENCE_ENTER_STATION: '📍',
+  GEOFENCE_EXIT_STATION:  '📍',
+  GEOFENCE_ENTER: '🔷',
+  GEOFENCE_EXIT:  '🔶',
 };
 const EVENT_COLOR: Record<string, string> = {
   FUEL_FILL:  '#16a34a',
@@ -25,6 +53,16 @@ const EVENT_COLOR: Record<string, string> = {
   FUEL_THEFT: '#dc2626',
   IGNITION_ON:  '#ca8a04',
   IGNITION_OFF: '#78716c',
+  BATTERY_ON:   '#0d9488',
+  BATTERY_OFF:  '#e11d48',
+  MOVEMENT_START: '#0284c7',
+  MOVEMENT_STOP:  '#f59e0b',
+  GEOFENCE_ENTER_DEPOT:   '#7c3aed',
+  GEOFENCE_EXIT_DEPOT:    '#a78bfa',
+  GEOFENCE_ENTER_STATION: '#0369a1',
+  GEOFENCE_EXIT_STATION:  '#38bdf8',
+  GEOFENCE_ENTER: '#059669',
+  GEOFENCE_EXIT:  '#d97706',
 };
 
 const RANGES = [
@@ -60,6 +98,7 @@ export default function FuelHistoryPage() {
   const [selectedTruckId, setSelectedTruckId] = useState<string | null>(null);
   const [rangeDays,        setRangeDays]        = useState<1 | 7 | 30>(7);
   const [selectedCompartment, setSelectedCompartment] = useState<number | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // Load trucks + asset events once on mount
   useEffect(() => {
@@ -201,10 +240,27 @@ export default function FuelHistoryPage() {
           <div className="flex-1 flex flex-col overflow-hidden">
 
             {/* Toolbar */}
-            <div className="flex items-center px-5 py-3 bg-white border-b border-slate-200 shrink-0">
-              <p className="text-sm font-bold text-slate-700">
-                {selectedTruck ? selectedTruck.device_id : '—'}
-              </p>
+            <div className="flex items-center justify-between px-5 py-3 bg-white border-b border-slate-200 shrink-0">
+              <div>
+                <p className="text-sm font-bold text-slate-700">
+                  {selectedTruck ? selectedTruck.device_id : '—'}
+                </p>
+                {(() => {
+                  const d = getActiveDest(loadDestinations(), loadActiveDestId());
+                  return d ? (
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Destination: <span className="font-semibold text-blue-600">{d.name}</span>
+                    </p>
+                  ) : null;
+                })()}
+              </div>
+              <button
+                onClick={() => setSidebarOpen(v => !v)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 transition text-[11px] font-semibold text-slate-500"
+              >
+                <span>{sidebarOpen ? '▶' : '◀'}</span>
+                <span>Events</span>
+              </button>
             </div>
 
             {/* Stats row */}
@@ -232,7 +288,7 @@ export default function FuelHistoryPage() {
             {/* Compartment bars — clickable, each expands to detail view */}
             <div className="bg-white border-b border-slate-200 shrink-0">
               {(() => {
-                const CAP    = 9100;
+                const CAP    = 10;
                 const COLORS = ['#3b82f6', '#22d3ee', '#14b8a6', '#38bdf8'];
                 const cf     = selectedTruck?.compartment_fuel ?? {};
                 const total  = [1,2,3,4].reduce((s, i) => s + (cf[String(i)] ?? 0), 0);
@@ -366,7 +422,7 @@ export default function FuelHistoryPage() {
             </div>
 
             {/* Chart area */}
-            <div className="shrink-0 bg-white border-b border-slate-200 px-4 pt-2 pb-1" style={{ height: 240 }}>
+            <div className="flex-1 bg-white border-b border-slate-200 px-4 pt-2 pb-1" style={{ minHeight: 180 }}>
               {/* Chart header: label changes with selected compartment */}
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
@@ -412,63 +468,129 @@ export default function FuelHistoryPage() {
               )}
             </div>
 
-            {/* Fuel event log */}
-            <div className="flex-1 overflow-y-auto bg-white">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50">
-                    <th className="text-left px-5 py-2.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest w-48">Time</th>
-                    <th className="text-left px-4 py-2.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Event</th>
-                    <th className="text-right px-4 py-2.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Before</th>
-                    <th className="text-right px-4 py-2.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">After</th>
-                    <th className="text-right px-5 py-2.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Change</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fuelLog.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="text-center py-12 text-slate-400 text-sm">
-                        No fuel events in this period
-                      </td>
-                    </tr>
-                  ) : fuelLog.slice().reverse().map(e => {
-                    const delta = e.value_before != null && e.value_after != null
-                      ? e.value_after - e.value_before : null;
-                    const color = EVENT_COLOR[e.event_type] ?? '#94a3b8';
-                    return (
-                      <tr key={e.id} className="border-b border-slate-50 hover:bg-slate-50 transition">
-                        <td className="px-5 py-2.5 text-[12px] text-slate-500 font-mono">
-                          {fmtTime(e.occurred_at)}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <span className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-                            <span className="text-[12px] font-semibold" style={{ color }}>
-                              {EVENT_LABEL[e.event_type] ?? e.event_type}
-                            </span>
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-[12px] font-mono text-slate-500">
-                          {e.value_before != null ? `${e.value_before.toFixed(0)} L` : '—'}
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-[12px] font-mono text-slate-500">
-                          {e.value_after != null ? `${e.value_after.toFixed(0)} L` : '—'}
-                        </td>
-                        <td className="px-5 py-2.5 text-right text-[12px] font-bold font-mono">
-                          {delta != null ? (
-                            <span style={{ color: delta > 0 ? '#16a34a' : '#dc2626' }}>
-                              {delta > 0 ? '+' : ''}{delta.toFixed(0)} L
-                            </span>
-                          ) : '—'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
           </div>
+
+          {/* ── Event sidebar ──────────────────────────────── */}
+          {sidebarOpen && (
+            <div className="w-72 shrink-0 flex flex-col bg-white border-l border-slate-200 overflow-hidden">
+
+              {/* Sidebar header */}
+              <div className="px-3 py-2.5 border-b border-slate-100 shrink-0">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Events</p>
+                  <span className="text-[10px] font-semibold text-slate-400">{truckEvents.length}</span>
+                </div>
+                {/* Fuel-only summary pills */}
+                {(stats.filled > 0 || stats.drained > 0 || stats.theft > 0) && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {stats.filled > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-50 text-green-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                        +{stats.filled.toFixed(0)} L filled
+                      </span>
+                    )}
+                    {stats.drained > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-50 text-orange-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-orange-500 inline-block" />
+                        −{stats.drained.toFixed(0)} L drained
+                      </span>
+                    )}
+                    {stats.theft > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-50 text-red-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+                        {stats.theft} theft alert{stats.theft > 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Timeline */}
+              <div className="flex-1 overflow-y-auto px-3 py-3">
+                {truckEvents.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 gap-2">
+                    <span className="text-2xl opacity-30">📋</span>
+                    <p className="text-[12px] text-slate-400 text-center">No events in this period</p>
+                  </div>
+                ) : (() => {
+                  const sorted = truckEvents.slice().reverse();
+                  return sorted.map((e, idx) => {
+                    const color   = EVENT_COLOR[e.event_type] ?? '#94a3b8';
+                    const label   = EVENT_LABEL[e.event_type] ?? e.event_type;
+                    const icon    = EVENT_ICON[e.event_type] ?? '•';
+                    const isFuel  = LOG_TYPES.includes(e.event_type);
+                    const isTheft = e.event_type === 'FUEL_THEFT';
+                    const delta   = e.value_before != null && e.value_after != null
+                      ? e.value_after - e.value_before : null;
+
+                    return (
+                      <div key={e.id} className="flex gap-2.5 relative">
+                        {/* Dot + vertical line */}
+                        <div className="flex flex-col items-center shrink-0 pt-0.5">
+                          <div
+                            className="w-2.5 h-2.5 rounded-full ring-2 ring-white shrink-0 z-10"
+                            style={{ background: color }}
+                          />
+                          {idx < sorted.length - 1 && (
+                            <div className="w-px flex-1 bg-slate-100 mt-0.5" style={{ minHeight: 20 }} />
+                          )}
+                        </div>
+
+                        {/* Content */}
+                        <div
+                          className={`flex-1 min-w-0 pb-3 rounded-lg px-2 py-1.5 mb-1 ${
+                            isTheft
+                              ? 'bg-red-50 border border-red-100'
+                              : isFuel
+                              ? 'bg-slate-50 border border-slate-100'
+                              : ''
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-1">
+                            <span className="text-[12px] font-semibold leading-tight flex items-center gap-1" style={{ color }}>
+                              <span className="text-[11px]">{icon}</span>
+                              {label}
+                            </span>
+                            {delta != null && isFuel && (
+                              <span
+                                className="text-[11px] font-bold font-mono shrink-0"
+                                style={{ color: delta > 0 ? '#16a34a' : '#dc2626' }}
+                              >
+                                {delta > 0 ? '+' : ''}{delta.toFixed(0)} L
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Before → After for fuel events */}
+                          {isFuel && e.value_before != null && e.value_after != null && (
+                            <div className="flex items-center gap-1 mt-1">
+                              <span className="text-[10px] font-mono text-slate-500">{e.value_before.toFixed(0)} L</span>
+                              <span className="text-[9px] text-slate-300">→</span>
+                              <span className="text-[10px] font-mono text-slate-500">{e.value_after.toFixed(0)} L</span>
+                              {/* Mini fill bar */}
+                              <div className="flex-1 h-1 bg-slate-100 rounded-full overflow-hidden ml-1">
+                                <div
+                                  className="h-full rounded-full"
+                                  style={{
+                                    width: `${Math.min(100, (e.value_after / 10) * 100)}%`,
+                                    background: color,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                            {fmtTime(e.occurred_at)}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

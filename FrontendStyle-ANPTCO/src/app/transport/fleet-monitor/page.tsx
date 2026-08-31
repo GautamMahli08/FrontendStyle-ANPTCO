@@ -8,6 +8,12 @@ import Header  from '@/src/components/layout/Header';
 import { getCurrentUser } from '@/src/lib/user-store';
 import { api, type ApiTruck, type ApiAssetEvent, type ApiGeofence } from '@/src/lib/api';
 import type { FleetMarker, TestWaypoint, DepotZone } from '@/src/components/FleetMap';
+import {
+  type SavedDestination,
+  loadDestinations, saveDestinations,
+  loadActiveDestId, saveActiveDestId,
+  getActiveDest,
+} from '@/src/lib/saved-destinations';
 
 const FleetMap = dynamic(() => import('@/src/components/FleetMap'), { ssr: false });
 
@@ -31,14 +37,6 @@ const EVENT_CFG: Record<string, { label: string; dot: string; icon: string; urge
 
 const WP_DOT = ['bg-blue-500', 'bg-purple-500'];
 
-const FIXED_DEST: TestWaypoint = {
-  id:     'fixed-dest',
-  lat:    23.6540469,
-  lng:    58.0965125,
-  name:   'Destination',
-  radius: 500,
-};
-
 function timeAgo(iso: string) {
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60)   return `${s}s ago`;
@@ -57,8 +55,12 @@ export default function TransportFleetMonitorPage() {
   const [error,        setError]        = useState<string | null>(null);
   const initialLoad    = useRef(true);
 
-  // Fixed destination — always pre-set, reset restores it
-  const [waypoints,    setWaypoints]    = useState<TestWaypoint[]>([{ ...FIXED_DEST }]);
+  // Saved destinations (localStorage)
+  const [destinations,  setDestinations]  = useState<SavedDestination[]>([]);
+  const [activeDestId,  setActiveDestId]  = useState<string | null>(null);
+  const [showAddDest,   setShowAddDest]   = useState(false);
+  const [destForm,      setDestForm]      = useState({ name: '', lat: '', lng: '', radius: '200' });
+  const [destFormErr,   setDestFormErr]   = useState('');
 
   const [downloading, setDownloading] = useState(false);
 
@@ -103,7 +105,8 @@ export default function TransportFleetMonitorPage() {
 
   useEffect(() => {
     if (!user) { router.replace('/auth/login'); return; }
-    // Trucks refresh every 5 s for smooth map movement; alerts every 30 s.
+    setDestinations(loadDestinations());
+    setActiveDestId(loadActiveDestId());
     loadTrucks();
     loadAlerts();
     loadDepots();
@@ -111,6 +114,53 @@ export default function TransportFleetMonitorPage() {
     const t2 = setInterval(() => loadAlerts(), 30_000);
     return () => { clearInterval(t1); clearInterval(t2); };
   }, [loadTrucks, loadAlerts, loadDepots, router, user]);
+
+  // Helpers for destination CRUD
+  function addDestination() {
+    const name   = destForm.name.trim();
+    const lat    = parseFloat(destForm.lat);
+    const lng    = parseFloat(destForm.lng);
+    const radius = parseInt(destForm.radius, 10);
+    if (!name)                           { setDestFormErr('Name is required'); return; }
+    if (isNaN(lat) || lat < -90  || lat > 90)  { setDestFormErr('Invalid latitude'); return; }
+    if (isNaN(lng) || lng < -180 || lng > 180) { setDestFormErr('Invalid longitude'); return; }
+    if (isNaN(radius) || radius < 50 || radius > 5000) { setDestFormErr('Radius must be 50–5000 m'); return; }
+    const d: SavedDestination = { id: crypto.randomUUID(), name, lat, lng, radius };
+    const next = [d, ...destinations];
+    setDestinations(next);
+    saveDestinations(next);
+    setActiveDestId(d.id);
+    saveActiveDestId(d.id);
+    setShowAddDest(false);
+    setDestForm({ name: '', lat: '', lng: '', radius: '200' });
+    setDestFormErr('');
+  }
+
+  function selectDest(id: string) {
+    setActiveDestId(id);
+    saveActiveDestId(id);
+  }
+
+  function deleteDest(id: string) {
+    const next = destinations.filter(d => d.id !== id);
+    setDestinations(next);
+    saveDestinations(next);
+    if (activeDestId === id) {
+      const newActive = next[0]?.id ?? null;
+      setActiveDestId(newActive);
+      saveActiveDestId(newActive);
+    }
+  }
+
+  function prefillFromTruck() {
+    const t = trucks.find(t => t.latitude != null);
+    if (t) setDestForm(f => ({ ...f, lat: t.latitude!.toFixed(6), lng: t.longitude!.toFixed(6) }));
+  }
+
+  function handleMapClick(lat: number, lng: number) {
+    if (!showAddDest) return;
+    setDestForm(f => ({ ...f, lat: lat.toFixed(6), lng: lng.toFixed(6) }));
+  }
 
   // Pre-select the first truck
   useEffect(() => {
@@ -160,36 +210,26 @@ export default function TransportFleetMonitorPage() {
     }
   };
 
-  const updateWaypoint = (id: string, patch: Partial<TestWaypoint>) =>
-    setWaypoints(prev => prev.map(w => w.id === id ? { ...w, ...patch } : w));
-
-  const resetTest = () => {
-    setWaypoints([{ ...FIXED_DEST }]);
-    setDispatchMsgs({});
-  };
-
-  const dispatchWaypoint = async (wp: TestWaypoint) => {
-    if (!destTruck) {
-      setDispatchMsgs(prev => ({ ...prev, [wp.id]: { ok: false, msg: 'Select a truck first.' } }));
-      return;
-    }
-    setDispatching(wp.id);
+  const dispatchToActive = async () => {
+    const dest = getActiveDest(destinations, activeDestId);
+    if (!dest)     { setDispatchMsgs(prev => ({ ...prev, dispatch: { ok: false, msg: 'Select a destination first.' } })); return; }
+    if (!destTruck){ setDispatchMsgs(prev => ({ ...prev, dispatch: { ok: false, msg: 'Select a truck first.' } })); return; }
+    setDispatching('dispatch');
     const truck = trucks.find(t => t.id === destTruck);
     try {
       const trip = await api.fleet.dispatch({
         truck_id:           destTruck,
-        dest_name:          wp.name,
-        dest_lat:           wp.lat,
-        dest_lng:           wp.lng,
-        dest_radius_meters: wp.radius,
+        dest_name:          dest.name,
+        dest_lat:           dest.lat,
+        dest_lng:           dest.lng,
+        dest_radius_meters: dest.radius,
         origin_name:        truck ? 'Current Position' : undefined,
         origin_lat:         truck?.latitude  ?? undefined,
         origin_lng:         truck?.longitude ?? undefined,
       });
-      updateWaypoint(wp.id, { dispatched: true });
-      setDispatchMsgs(prev => ({ ...prev, [wp.id]: { ok: true, msg: `En route · ${trip.id.slice(0, 8)}…`, tripId: trip.id, tripStatus: trip.status } }));
+      setDispatchMsgs(prev => ({ ...prev, dispatch: { ok: true, msg: `En route · ${trip.id.slice(0, 8)}…`, tripId: trip.id, tripStatus: trip.status } }));
     } catch (e: any) {
-      setDispatchMsgs(prev => ({ ...prev, [wp.id]: { ok: false, msg: e.message } }));
+      setDispatchMsgs(prev => ({ ...prev, dispatch: { ok: false, msg: e.message } }));
     } finally {
       setDispatching(null);
     }
@@ -256,6 +296,12 @@ export default function TransportFleetMonitorPage() {
 
   if (!user) return null;
 
+  const activeDest = getActiveDest(destinations, activeDestId);
+  // Convert active destination to a waypoint for the map
+  const waypoints: TestWaypoint[] = activeDest
+    ? [{ id: activeDest.id, name: activeDest.name, lat: activeDest.lat, lng: activeDest.lng, radius: activeDest.radius }]
+    : [];
+
   const markers: FleetMarker[] = trucks
     .filter(t => t.latitude != null && t.longitude != null)
     .map(t => ({
@@ -319,7 +365,7 @@ export default function TransportFleetMonitorPage() {
             {[
               { label: 'Total Trucks',    value: trucks.length                },
               { label: 'On Map',          value: markers.length               },
-              { label: 'Destination',      value: `${FIXED_DEST.lat.toFixed(4)}, ${FIXED_DEST.lng.toFixed(4)}` },
+              { label: 'Destination',      value: activeDest ? activeDest.name : 'None selected' },
               { label: 'Events (loaded)', value: alerts.length                },
             ].map(s => (
               <div key={s.label} className="bg-white rounded-xl border border-slate-200 p-4">
@@ -371,6 +417,8 @@ export default function TransportFleetMonitorPage() {
                   depots={depots as DepotZone[]}
                   height={520}
                   selectedTruckId={destTruck || undefined}
+                  onMapClick={handleMapClick}
+                  placingMode={showAddDest}
                 />
               )}
             </div>
@@ -378,101 +426,164 @@ export default function TransportFleetMonitorPage() {
             {/* Right column — Test Setup + Alert feed */}
             <div className="col-span-2 space-y-4">
 
-              {/* Test point controls */}
+              {/* ── Destinations card ── */}
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-700">Destinations</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Select one · it stays fixed until changed</p>
+                  </div>
+                  <button
+                    onClick={() => { setShowAddDest(v => !v); setDestFormErr(''); }}
+                    className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition ${
+                      showAddDest
+                        ? 'bg-slate-100 border-slate-200 text-slate-600'
+                        : 'bg-blue-600 border-blue-600 text-white hover:bg-blue-700'
+                    }`}
+                  >
+                    {showAddDest ? '✕ Cancel' : '+ Add'}
+                  </button>
+                </div>
+
+                {/* Add destination form */}
+                {showAddDest && (
+                  <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 space-y-2">
+                    {/* Map click hint */}
+                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-[11px] font-semibold ${
+                      destForm.lat ? 'bg-green-50 border-green-200 text-green-700' : 'bg-amber-50 border-amber-200 text-amber-700'
+                    }`}>
+                      <span>{destForm.lat ? '📍' : '🖱️'}</span>
+                      {destForm.lat ? 'Pin placed — or edit coordinates below' : 'Click the map to place a pin'}
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Destination name (e.g. Plant Gate 2)"
+                      value={destForm.name}
+                      onChange={e => setDestForm(f => ({ ...f, name: e.target.value }))}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="number" step="any" placeholder="Latitude"
+                        value={destForm.lat} onChange={e => setDestForm(f => ({ ...f, lat: e.target.value }))}
+                        className="px-3 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      <input type="number" step="any" placeholder="Longitude"
+                        value={destForm.lng} onChange={e => setDestForm(f => ({ ...f, lng: e.target.value }))}
+                        className="px-3 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="number" min="50" max="5000" placeholder="Radius (m)"
+                        value={destForm.radius} onChange={e => setDestForm(f => ({ ...f, radius: e.target.value }))}
+                        className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      {trucks.some(t => t.latitude != null) && (
+                        <button onClick={prefillFromTruck}
+                          className="shrink-0 text-[10px] font-semibold text-blue-600 border border-blue-200 hover:bg-blue-50 px-2 py-1.5 rounded-lg transition whitespace-nowrap">
+                          Use truck pos
+                        </button>
+                      )}
+                    </div>
+                    {destFormErr && <p className="text-[11px] text-red-500 font-semibold">{destFormErr}</p>}
+                    <button onClick={addDestination}
+                      className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition">
+                      Save Destination
+                    </button>
+                  </div>
+                )}
+
+                {/* Destination list */}
+                <div className="divide-y divide-slate-50 max-h-56 overflow-y-auto">
+                  {destinations.length === 0 ? (
+                    <div className="flex flex-col items-center py-6 gap-1">
+                      <span className="text-xl opacity-20">📍</span>
+                      <p className="text-[11px] text-slate-400">No destinations yet — click + Add</p>
+                    </div>
+                  ) : destinations.map(d => {
+                    const isActive = d.id === activeDestId;
+                    return (
+                      <div key={d.id} className={`flex items-center gap-2 px-3 py-2.5 transition ${isActive ? 'bg-blue-50' : 'hover:bg-slate-50'}`}>
+                        <button
+                          onClick={() => selectDest(d.id)}
+                          className={`w-3.5 h-3.5 rounded-full border-2 shrink-0 transition ${
+                            isActive ? 'border-blue-600 bg-blue-600' : 'border-slate-300 hover:border-blue-400'
+                          }`}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-[12px] font-semibold truncate ${isActive ? 'text-blue-700' : 'text-slate-700'}`}>{d.name}</p>
+                          <p className="text-[9px] font-mono text-slate-400">{d.lat.toFixed(4)}, {d.lng.toFixed(4)} · r={d.radius}m</p>
+                        </div>
+                        {isActive && <span className="text-[9px] font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-full shrink-0">ACTIVE</span>}
+                        <button
+                          onClick={() => deleteDest(d.id)}
+                          className="shrink-0 text-slate-300 hover:text-red-500 transition text-sm leading-none p-1"
+                          title="Delete destination"
+                        >✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ── Dispatch card ── */}
               <div className="bg-white rounded-xl border border-slate-200">
                 <div className="px-4 py-3 border-b border-slate-100 flex items-start justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold text-slate-700">Dispatch</p>
-                    <p className="text-xs text-slate-400 mt-0.5">Select a truck and dispatch to the fixed destination.</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {activeDest ? `→ ${activeDest.name}` : 'Select a destination above first'}
+                    </p>
                   </div>
-                  {Object.keys(dispatchMsgs).length > 0 && (
+                  {dispatchMsgs['dispatch'] && (
                     <button
-                      onClick={resetTest}
+                      onClick={() => setDispatchMsgs({})}
                       className="shrink-0 text-xs font-medium text-red-500 border border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition"
-                    >
-                      Reset
-                    </button>
+                    >Reset</button>
                   )}
                 </div>
-
                 <div className="px-4 py-3 space-y-3">
-                  {/* Truck + API key — shared for both dispatches */}
                   <div>
                     <label className="block text-[11px] font-medium text-slate-500 mb-1">Truck</label>
-                    <select
-                      value={destTruck}
-                      onChange={e => setDestTruck(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
+                    <select value={destTruck} onChange={e => setDestTruck(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
                       {trucks.map(t => <option key={t.id} value={t.id}>{t.device_id}</option>)}
                     </select>
                   </div>
-                </div>
-
-                {/* Fixed destination waypoint */}
-                <div className="divide-y divide-slate-50">
-                  {waypoints.map((wp, i) => {
-                    const msg = dispatchMsgs[wp.id];
+                  <button
+                    onClick={dispatchToActive}
+                    disabled={!!dispatching || !activeDest || !!dispatchMsgs['dispatch']?.ok}
+                    className={`w-full py-2 text-xs font-bold rounded-lg transition ${
+                      dispatchMsgs['dispatch']?.ok
+                        ? 'bg-green-100 text-green-700 cursor-default'
+                        : 'bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white'
+                    }`}
+                  >
+                    {dispatching === 'dispatch' ? 'Dispatching…' : dispatchMsgs['dispatch']?.ok ? '✓ Dispatched' : 'Dispatch →'}
+                  </button>
+                  {(() => {
+                    const msg = dispatchMsgs['dispatch'];
+                    if (!msg) return null;
                     return (
-                      <div key={wp.id} className="px-4 py-3 space-y-2">
-                        <div className="flex items-center gap-2">
-                          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${WP_DOT[i]}`} />
-                          <input
-                            value={wp.name}
-                            onChange={e => updateWaypoint(wp.id, { name: e.target.value })}
-                            className="flex-1 text-xs font-semibold text-slate-800 border-0 outline-none bg-transparent"
-                            placeholder="Destination"
-                          />
-                        </div>
-                          <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                            <span className="font-mono">{wp.lat.toFixed(5)}, {wp.lng.toFixed(5)}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <label className="text-[11px] text-slate-500 shrink-0">Radius</label>
-                            <input
-                              value={wp.radius}
-                              onChange={e => updateWaypoint(wp.id, { radius: parseInt(e.target.value) || 200 })}
-                              type="number" min="50" max="5000"
-                              className="w-20 px-2 py-1 border border-slate-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            />
-                            <span className="text-[11px] text-slate-400">m</span>
-                            <button
-                              onClick={() => dispatchWaypoint(wp)}
-                              disabled={dispatching === wp.id || wp.dispatched}
-                              className={`ml-auto text-xs font-semibold px-3 py-1.5 rounded-lg transition ${
-                                wp.dispatched
-                                  ? 'bg-green-100 text-green-700 cursor-default'
-                                  : 'bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white'
-                              }`}
-                            >
-                              {dispatching === wp.id ? 'Dispatching…' : wp.dispatched ? '✓ Active' : 'Dispatch →'}
-                            </button>
-                          </div>
-                          {msg && (
-                            <p className={`text-[11px] ${msg.ok ? 'text-green-600' : 'text-red-600'}`}>
-                              {msg.tripStatus === 'ARRIVED' ? '📍 Arrived at destination!' : msg.msg}
-                            </p>
-                          )}
-                          {msg?.tripStatus === 'ARRIVED' && msg.tripId && (
-                            <button
-                              onClick={() => completeDelivery(wp.id, msg.tripId!)}
-                              disabled={completing === wp.id}
-                              className="w-full text-xs font-semibold bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white py-1.5 rounded-lg transition"
-                            >
-                              {completing === wp.id ? 'Confirming…' : 'Complete Delivery ✓'}
-                            </button>
-                          )}
-                          {msg?.tripStatus === 'DELIVERY_ACCEPTED' && (
-                            <p className="text-[11px] text-amber-600 font-medium">Delivery confirmed ✓ — waiting for truck to return to depot…</p>
-                          )}
-                          {msg?.tripStatus === 'COMPLETED' && (
-                            <p className="text-[11px] text-indigo-600 font-medium">🏭 Returned to depot — trip complete.</p>
-                          )}
-                        </div>
-                      );
-                    })}
+                      <div className="space-y-2">
+                        <p className={`text-[11px] ${msg.ok ? 'text-green-600' : 'text-red-600'}`}>
+                          {msg.tripStatus === 'ARRIVED' ? '📍 Arrived at destination!' : msg.msg}
+                        </p>
+                        {msg.tripStatus === 'ARRIVED' && msg.tripId && (
+                          <button
+                            onClick={() => completeDelivery('dispatch', msg.tripId!)}
+                            disabled={completing === 'dispatch'}
+                            className="w-full text-xs font-semibold bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white py-1.5 rounded-lg transition"
+                          >
+                            {completing === 'dispatch' ? 'Confirming…' : 'Complete Delivery ✓'}
+                          </button>
+                        )}
+                        {msg.tripStatus === 'DELIVERY_ACCEPTED' && (
+                          <p className="text-[11px] text-amber-600 font-medium">Delivery confirmed ✓ — waiting for truck to return to depot…</p>
+                        )}
+                        {msg.tripStatus === 'COMPLETED' && (
+                          <p className="text-[11px] text-indigo-600 font-medium">🏭 Returned to depot — trip complete.</p>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
-
               </div>
 
               {/* ── Fuel Activity (back in right column) ── */}
@@ -689,7 +800,7 @@ export default function TransportFleetMonitorPage() {
                       </div>
                     </div>
                     {(() => {
-                      const CAP    = 9100;
+                      const CAP    = 10;
                       const colors = ['bg-blue-500', 'bg-cyan-400', 'bg-teal-500', 'bg-sky-500'];
                       const total  = [1,2,3,4].reduce((s, i) => s + (t.compartment_fuel?.[String(i)] ?? 0), 0);
                       return (

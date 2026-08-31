@@ -30,16 +30,10 @@ const baseNav: Record<UserRole, NavItem[]> = {
 
   TRANSPORT_ADMIN: [
     { name: 'Dashboard',       path: '/transport/dashboard',              icon: '🏠' },
-    // Ordering-module items — hidden when modules.ordering = false
-    { name: 'Orders',          path: '/transport/orders',                 icon: '📦' },
-    // Dispatch-API items — shown when modules.dispatch_api = true
     { name: 'Trips',           path: '/transport/trips',                  icon: '🚚' },
     { name: 'Fleet Monitor',   path: '/transport/fleet-monitor',          icon: '🗺️' },
     { name: 'Trip History',    path: '/transport/trip-history',           icon: '🛣️' },
-    { name: 'Fuel History',   path: '/transport/fuel-history',           icon: '⛽' },
-    { name: 'My Trucks',       path: '/transport/trucks',                 icon: '🚛' },
-    { name: 'Connect Seller',  path: '/transport/trucks/connect-seller',  icon: '🔗' },
-    { name: 'Drivers',         path: '/transport/drivers',                icon: '👥' },
+    { name: 'Fuel History',    path: '/transport/fuel-history',           icon: '⛽' },
   ],
 
   CLIENT: [

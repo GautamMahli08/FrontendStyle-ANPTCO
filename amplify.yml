@@ -1,0 +1,19 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - cd FrontendStyle-ANPTCO
+        - npm ci
+    build:
+      commands:
+        - cd FrontendStyle-ANPTCO
+        - npm run build
+  artifacts:
+    baseDirectory: FrontendStyle-ANPTCO/.next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - FrontendStyle-ANPTCO/node_modules/**/*
+      - FrontendStyle-ANPTCO/.next/cache/**/*

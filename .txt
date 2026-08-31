@@ -39,3 +39,67 @@ client@anptco.test	Anptco@2026!	ERP Client
 
 Configrator urls
 209.58.168.101      6034
+
+Connection tab:
+
+Field	Value
+Host	geofencedev.cpegaw240kd6.ap-south-1.rds.amazonaws.com
+Port	5432
+Maintenance database	postgres
+Username	postgres
+Password	(from the secret)
+
+
+The tunnel likely dropped. Check your PowerShell window — is the SSH command still running (cursor blinking)?
+
+If it closed or shows an error, restart the tunnel:
+
+ssh -i "F:\GDownloAD\galileosky-key.pem" -L 15432:ingest-db.cpegaw240kd6.ap-south-1.rds.amazonaws.com:5432 -N ec2-user@65.2.232.170
+
+
+UPDATE trips
+SET dest_name = 'Your New Name Here'
+WHERE id = '<trip-uuid>';
+
+COMMIT;
+
+
+WARNING:  there is no transaction in progress
+COMMIT
+
+Query returned successfully in 81 msec.
+
+2d334b2d-89e2-4857-b271-f8da85c239fc
+
+For the compartment C1 update, give me the SQL to run against your DB. I need to know where 9100L lives — which table:
+
+If it's in truck_telemetry.compartment_sensors (most recent ping):
+
+
+-- Preview first
+SELECT DISTINCT ON (truck_id)
+  truck_id, timestamp, compartment_sensors
+FROM truck_telemetry
+WHERE compartment_sensors ? '1'
+ORDER BY truck_id, timestamp DESC;
+
+-- Then update only the latest row for that truck
+UPDATE truck_telemetry
+SET compartment_sensors = jsonb_set(compartment_sensors, '{1}', '10')
+WHERE id = (
+  SELECT id FROM truck_telemetry
+  WHERE truck_id = '<truck-uuid>'
+    AND compartment_sensors ? '1'
+  ORDER BY timestamp DESC
+  LIMIT 1
+);
+If it's in trucks.compartments (a config column):
+
+
+SELECT id, compartments FROM trucks;
+
+UPDATE trucks
+SET compartments = jsonb_set(compartments, '{c1}', '10')
+WHERE id = '<truck-uuid>';
+Run the SELECT queries first and paste what comes back — I'll give you the exact UPDATE once I know which table holds the 9100L value and what the JSON structure looks like.
+

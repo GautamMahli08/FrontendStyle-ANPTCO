@@ -8,12 +8,18 @@ import Header  from '@/src/components/layout/Header';
 import { getCurrentUser } from '@/src/lib/user-store';
 import { api, type ApiTrip, type ApiAssetEvent, type ApiTruck, type ApiGeofence } from '@/src/lib/api';
 import type { TripRoute, TripEvent, GeofenceZone } from '@/src/components/TripHistoryMap';
+import { loadDestinations, loadActiveDestId, getActiveDest } from '@/src/lib/saved-destinations';
 
 const TripHistoryMap = dynamic(() => import('@/src/components/TripHistoryMap'), { ssr: false });
 
 const TRIP_COLORS = [
   '#7c3aed','#1d4ed8','#059669','#0f766e','#0891b2',
   '#d97706','#dc2626','#4f46e5','#9333ea','#16a34a',
+];
+
+const CAL_MONTHS = [
+  'January','February','March','April','May','June',
+  'July','August','September','October','November','December',
 ];
 
 // ── Plain-language labels ──────────────────────────────────────────────────
@@ -48,6 +54,8 @@ const EVENT_LABEL: Record<string, string> = {
   GEOFENCE_EXIT_DEPOT:    'Left Depot',
   GEOFENCE_ENTER_STATION: 'Reached Destination',
   GEOFENCE_EXIT_STATION:  'Left Destination',
+  GEOFENCE_ENTER:         'Entered Geofence',
+  GEOFENCE_EXIT:          'Exited Geofence',
 };
 
 const EVENT_ICON: Record<string, string> = {
@@ -64,6 +72,8 @@ const EVENT_ICON: Record<string, string> = {
   GEOFENCE_EXIT_DEPOT:    '🏭',
   GEOFENCE_ENTER_STATION: '📍',
   GEOFENCE_EXIT_STATION:  '📍',
+  GEOFENCE_ENTER:         '🔷',
+  GEOFENCE_EXIT:          '🔶',
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -85,6 +95,8 @@ function eventColor(type: string): string {
   if (type === 'GEOFENCE_EXIT_STATION')  return '#38bdf8'; // 🔵 sky      — left destination
   if (type === 'IGNITION_ON')            return '#ca8a04'; // 🟡 yellow   — engine started
   if (type === 'IGNITION_OFF')           return '#78716c'; // ⚫ gray     — engine stopped
+  if (type === 'GEOFENCE_ENTER')         return '#059669'; // 🟢 emerald  — entered custom zone
+  if (type === 'GEOFENCE_EXIT')          return '#d97706'; // 🟡 amber    — exited custom zone
   return '#94a3b8';
 }
 
@@ -99,9 +111,19 @@ const EVENT_LEGEND = [
   { color: '#0369a1', label: 'At Station',    types: ['GEOFENCE_ENTER_STATION','GEOFENCE_EXIT_STATION'] as string[] },
   { color: '#ca8a04', label: 'Engine',        types: ['IGNITION_ON','IGNITION_OFF'] as string[]                  },
   { color: '#0d9488', label: 'Power',         types: ['BATTERY_ON','BATTERY_OFF'] as string[]                    },
+  { color: '#059669', label: 'Geofences',    types: ['GEOFENCE_ENTER','GEOFENCE_EXIT'] as string[]              },
 ];
 
 const ALL_EVENT_TYPES = new Set(EVENT_LEGEND.flatMap(l => l.types));
+
+function localDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function todayDateStr(): string {
+  return localDate(new Date().toISOString());
+}
 
 function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
   const R    = 6371;
@@ -154,6 +176,9 @@ export default function TripHistoryPage() {
   const [filter,           setFilter]           = useState<string>('All');
   const [visibleEventTypes, setVisibleEventTypes] = useState<Set<string>>(new Set(ALL_EVENT_TYPES));
   const [showGeofences,     setShowGeofences]     = useState(true);
+  const [selectedCalDates,  setSelectedCalDates]  = useState<Set<string>>(new Set());
+  const [lastCalSelected,   setLastCalSelected]   = useState<string | null>(null);
+  const [calViewDate,       setCalViewDate]        = useState(() => { const d = new Date(); d.setDate(1); return d; });
 
   function toggleEventFilter(types: string[]) {
     setVisibleEventTypes(prev => {
@@ -166,6 +191,49 @@ export default function TripHistoryPage() {
   }
 
   const truckById = new Map(trucks.map(t => [t.id, t]));
+
+  // Chronological order (oldest first) used to assign stable #1, #2, … numbers.
+  const tripsChronological = useMemo(
+    () => [...trips].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+    [trips],
+  );
+  function tripNumber(tripId: string) {
+    return tripsChronological.findIndex(t => t.id === tripId) + 1;
+  }
+
+  // Trip count per date for calendar badges
+  const tripCountByDate = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const trip of trips) {
+      const d = localDate(trip.created_at);
+      map.set(d, (map.get(d) ?? 0) + 1);
+    }
+    return map;
+  }, [trips]);
+
+  // Calendar grid for the mini calendar (6 rows × 7 cols)
+  const calendarDays = useMemo(() => {
+    const year  = calViewDate.getFullYear();
+    const month = calViewDate.getMonth();
+    const firstDow      = new Date(year, month, 1).getDay();
+    const daysInMonth   = new Date(year, month + 1, 0).getDate();
+    const daysInPrevMon = new Date(year, month, 0).getDate();
+    const fmt = (y: number, m: number, d: number) =>
+      `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const days: { date: string; day: number; inMonth: boolean }[] = [];
+    for (let i = firstDow - 1; i >= 0; i--) {
+      const day = daysInPrevMon - i;
+      days.push({ date: fmt(month === 0 ? year-1 : year, month === 0 ? 11 : month-1, day), day, inMonth: false });
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      days.push({ date: fmt(year, month, d), day: d, inMonth: true });
+    }
+    const remaining = 42 - days.length;
+    for (let d = 1; d <= remaining; d++) {
+      days.push({ date: fmt(month === 11 ? year+1 : year, month === 11 ? 0 : month+1, d), day: d, inMonth: false });
+    }
+    return days;
+  }, [calViewDate]);
 
   useEffect(() => {
     if (!user) { router.replace('/auth/login'); return; }
@@ -320,6 +388,12 @@ export default function TripHistoryPage() {
       zones.push({ id: depot.id, lat: depot.latitude, lng: depot.longitude,
         radius: depot.radius_meters, name: depot.name, type: 'depot' });
     }
+    // Active saved destination from fleet monitor (localStorage)
+    const savedDest = getActiveDest(loadDestinations(), loadActiveDestId());
+    if (savedDest) {
+      zones.push({ id: `saved-${savedDest.id}`, lat: savedDest.lat, lng: savedDest.lng,
+        radius: savedDest.radius, name: savedDest.name, type: 'station' });
+    }
     // Only show destination circles for trips that are actually rendered as routes on the map.
     // Use trip id as key to guarantee uniqueness; deduplicate overlapping locations by proximity.
     const routeIds = new Set(routes.map(r => r.id));
@@ -351,9 +425,12 @@ export default function TripHistoryPage() {
   const totalStops   = trips.reduce((s, t) => s + stopCount(t), 0);
   const deliveredCnt = trips.filter(t => t.status === 'DELIVERY_ACCEPTED' || t.status === 'COMPLETED').length;
 
-  const visibleTrips = filter === 'All'
-    ? trips
-    : trips.filter(t => t.status === FILTER_STATUS[filter]);
+  const visibleTrips = useMemo(() => {
+    let out = trips;
+    if (selectedCalDates.size > 0) out = out.filter(t => selectedCalDates.has(localDate(t.created_at)));
+    if (filter !== 'All') out = out.filter(t => t.status === FILTER_STATUS[filter]);
+    return out;
+  }, [trips, selectedCalDates, filter]);
 
   const selectedTrip  = selectedId ? trips.find(t => t.id === selectedId) ?? null : null;
   const selectedIdx   = trips.findIndex(t => t.id === selectedId);
@@ -412,6 +489,104 @@ export default function TripHistoryPage() {
                   <p className="text-[10px] text-slate-500 mt-0.5">{s.label}</p>
                 </div>
               ))}
+            </div>
+
+            {/* Mini Calendar Filter */}
+            <div className="border-b border-slate-100 shrink-0">
+              {/* Month navigation */}
+              <div className="flex items-center justify-between px-3 pt-2 pb-1">
+                <button
+                  onClick={() => setCalViewDate(d => new Date(d.getFullYear(), d.getMonth()-1, 1))}
+                  className="w-6 h-6 flex items-center justify-center rounded hover:bg-slate-100 text-slate-500 text-base font-bold transition"
+                >‹</button>
+                <span className="text-[11px] font-bold text-slate-600">
+                  {CAL_MONTHS[calViewDate.getMonth()]} {calViewDate.getFullYear()}
+                </span>
+                <button
+                  onClick={() => setCalViewDate(d => new Date(d.getFullYear(), d.getMonth()+1, 1))}
+                  className="w-6 h-6 flex items-center justify-center rounded hover:bg-slate-100 text-slate-500 text-base font-bold transition"
+                >›</button>
+              </div>
+
+              {/* Day-of-week headers */}
+              <div className="grid grid-cols-7 px-2">
+                {['S','M','T','W','T','F','S'].map((d, i) => (
+                  <div key={i} className="py-0.5 text-center text-[9px] font-bold text-slate-400">{d}</div>
+                ))}
+              </div>
+
+              {/* Date cells */}
+              <div className="grid grid-cols-7 px-2 pb-2">
+                {calendarDays.map(({ date, day, inMonth }) => {
+                  const isSelected = selectedCalDates.has(date);
+                  const isToday    = date === todayDateStr();
+                  const count      = inMonth ? (tripCountByDate.get(date) ?? 0) : 0;
+                  return (
+                    <button
+                      key={date}
+                      onClick={e => {
+                        if (!inMonth) return;
+                        if (e.shiftKey && lastCalSelected && lastCalSelected !== date) {
+                          // Range select between lastCalSelected and date
+                          const d1 = new Date(lastCalSelected);
+                          const d2 = new Date(date);
+                          const [start, end] = d1 < d2 ? [d1, d2] : [d2, d1];
+                          setSelectedCalDates(prev => {
+                            const next = new Set(prev);
+                            const cur  = new Date(start);
+                            while (cur <= end) {
+                              next.add(localDate(cur.toISOString()));
+                              cur.setDate(cur.getDate() + 1);
+                            }
+                            return next;
+                          });
+                        } else {
+                          setSelectedCalDates(prev => {
+                            const next = new Set(prev);
+                            if (next.has(date)) next.delete(date);
+                            else next.add(date);
+                            return next;
+                          });
+                        }
+                        setLastCalSelected(date);
+                        setSelectedId(null);
+                      }}
+                      disabled={!inMonth}
+                      className={`flex flex-col items-center justify-center rounded-lg min-h-[30px] py-0.5 transition-all ${
+                        !inMonth   ? 'opacity-20 cursor-default' :
+                        isSelected ? 'bg-blue-600 cursor-pointer' :
+                                     'hover:bg-slate-100 cursor-pointer'
+                      }`}
+                    >
+                      <span className={`text-[11px] font-semibold leading-none ${
+                        isSelected ? 'text-white' :
+                        isToday    ? 'text-blue-600 font-bold' :
+                        inMonth    ? 'text-slate-700' : 'text-slate-300'
+                      }`}>{day}</span>
+                      {count > 0 && (
+                        <span className={`text-[8px] font-bold leading-none mt-0.5 ${
+                          isSelected ? 'text-blue-200' : 'text-blue-500'
+                        }`}>{count}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Active filter indicator */}
+              {selectedCalDates.size > 0 && (
+                <div className="px-3 pb-2 flex items-center justify-between">
+                  <span className="text-[10px] text-slate-500 font-medium">
+                    {selectedCalDates.size === 1
+                      ? `${[...selectedCalDates][0]} · ${visibleTrips.length} trip${visibleTrips.length !== 1 ? 's' : ''}`
+                      : `${selectedCalDates.size} days · ${visibleTrips.length} trip${visibleTrips.length !== 1 ? 's' : ''}`}
+                  </span>
+                  <button
+                    onClick={() => { setSelectedCalDates(new Set()); setLastCalSelected(null); }}
+                    className="text-[10px] font-semibold text-blue-500 hover:text-blue-700 transition"
+                  >Clear</button>
+                </div>
+              )}
             </div>
 
             {/* Filter pills */}
@@ -493,7 +668,7 @@ export default function TripHistoryPage() {
                   <span className="text-5xl">🛣️</span>
                   <p className="text-sm font-medium">No {filter !== 'All' ? filter.toLowerCase() : ''} trips yet</p>
                 </div>
-              ) : visibleTrips.map((t, listIdx) => {
+              ) : visibleTrips.map((t) => {
                 const globalIdx = trips.findIndex(x => x.id === t.id);
                 const color     = TRIP_COLORS[globalIdx % TRIP_COLORS.length];
                 const km        = kmFor(t);
@@ -517,9 +692,12 @@ export default function TripHistoryPage() {
                     <div className="absolute left-0 top-0 bottom-0 w-1 rounded-l-xl" style={{ background: color }} />
 
                     <div className="pl-4 pr-3 py-3">
-                      {/* Row 1: date + status */}
+                      {/* Row 1: trip number + date + status */}
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-[11px] text-slate-500 font-medium">{fmtDate(t.created_at)}</span>
+                        <span className="text-[11px] text-slate-500 font-medium">
+                          <span className="font-mono font-bold text-slate-300">#{tripNumber(t.id)}</span>
+                          {' · '}{fmtDate(t.created_at)}
+                        </span>
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_STYLE[t.status] ?? 'bg-slate-100 text-slate-600'}`}>
                           {STATUS_LABEL[t.status] ?? t.status}
                         </span>
@@ -596,8 +774,8 @@ export default function TripHistoryPage() {
             </div>
           </div>
 
-          {/* ── Right: Map + event strip ────────────────────────── */}
-          <div className="flex-1 flex flex-col overflow-hidden">
+          {/* ── Right: Map + event sidebar ─────────────────────── */}
+          <div className="flex-1 flex overflow-hidden">
 
             {/* Map */}
             <div className="flex-1 relative">
@@ -631,136 +809,396 @@ export default function TripHistoryPage() {
               )}
             </div>
 
-            {/* ── Event strip ───────────────────────────────────── */}
+            {/* ── Event sidebar ─────────────────────────────────── */}
             {selectedTrip && (() => {
               const evs = tripEvents(selectedTrip);
               const km  = kmFor(selectedTrip);
               const dur = tripDuration(selectedTrip.created_at, selectedTrip.updated_at);
-              return (
-                <div className="shrink-0 border-t-2 border-slate-200 bg-white" style={{ height: 220 }}>
+              const displayEvs    = evs.filter(e => e.event_type !== 'MOVEMENT_START');
+              const departureEv   = evs.find(e => e.event_type === 'GEOFENCE_EXIT_DEPOT');
+              const arrivalEv     = evs.find(e => e.event_type === 'GEOFENCE_ENTER_STATION');
+              const departureTime = departureEv?.occurred_at ?? selectedTrip.created_at;
+              const hasArrived    = ['ARRIVED','DELIVERY_ACCEPTED','COMPLETED'].includes(selectedTrip.status);
+              const arrivalTime   = arrivalEv?.occurred_at ?? (hasArrived ? selectedTrip.updated_at : null);
+              const tripNum       = tripNumber(selectedTrip.id);
 
-                  {/* Header */}
-                  <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-100">
-                    <div className="flex items-center gap-2.5">
-                      <span className="w-3 h-3 rounded-full shrink-0" style={{ background: selectedColor }} />
-                      <div>
-                        <p className="text-sm font-bold text-slate-800 leading-none">
+              async function printTripPDF() {
+                const stopDurOf = (ev: ApiAssetEvent) => {
+                  const next = evs.find(e =>
+                    e.event_type === 'MOVEMENT_START' &&
+                    new Date(e.occurred_at) > new Date(ev.occurred_at)
+                  );
+                  if (!next) return '';
+                  const mins = Math.round((new Date(next.occurred_at).getTime() - new Date(ev.occurred_at).getTime()) / 60000);
+                  return mins < 1 ? '< 1 min' : mins < 60 ? `${mins} min` : `${Math.floor(mins/60)}h ${mins%60}m`;
+                };
+
+                // ── SVG route map ────────────────────────────────────
+                const gpsTrack = tripGpsTrack(selectedTrip!);
+                // Fetch road-snapped route from OSRM (same logic as TripHistoryMap)
+                let roadTrack: [number, number][] = gpsTrack;
+                if (gpsTrack.length >= 2) {
+                  try {
+                    const lats    = gpsTrack.map(p => p[0]);
+                    const lngs    = gpsTrack.map(p => p[1]);
+                    const latSpan = Math.max(...lats) - Math.min(...lats);
+                    const lngSpan = Math.max(...lngs) - Math.min(...lngs);
+                    let wpStr: string;
+                    if (latSpan > 0.01 || lngSpan > 0.01) {
+                      const step   = Math.max(1, Math.floor(gpsTrack.length / 12));
+                      const sample: [number, number][] = [gpsTrack[0]];
+                      for (let i = step; i < gpsTrack.length - 1; i += step) sample.push(gpsTrack[i]);
+                      sample.push(gpsTrack[gpsTrack.length - 1]);
+                      wpStr = sample.map(([lat, lng]) => `${lng},${lat}`).join(';');
+                    } else {
+                      const r = routes.find(rt => rt.id === selectedTrip!.id);
+                      wpStr = r ? `${r.originLng},${r.originLat};${r.destLng},${r.destLat}` : `${gpsTrack[0][1]},${gpsTrack[0][0]};${gpsTrack[gpsTrack.length-1][1]},${gpsTrack[gpsTrack.length-1][0]}`;
+                    }
+                    const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${wpStr}?overview=full&geometries=geojson`;
+                    const osrmRes  = await fetch(osrmUrl);
+                    const osrmData = await osrmRes.json();
+                    const coords: number[][] | undefined = osrmData.routes?.[0]?.geometry?.coordinates;
+                    if (coords && coords.length > 0) {
+                      roadTrack = coords.map(([lng, lat]) => [lat, lng] as [number, number]);
+                    }
+                  } catch {
+                    // fall back to GPS breadcrumbs if OSRM unavailable
+                  }
+                }
+                // Serialize data for the Leaflet map script
+                // Use route endpoints rather than trip origin_lat/lng to avoid 0,0 bad coords
+                const depotPt: [number, number] = (
+                  selectedTrip!.origin_lat && selectedTrip!.origin_lng
+                    ? [selectedTrip!.origin_lat, selectedTrip!.origin_lng]
+                    : roadTrack[0] ?? [0, 0]
+                );
+                const destPt: [number, number] = (
+                  selectedTrip!.dest_lat && selectedTrip!.dest_lng
+                    ? [selectedTrip!.dest_lat, selectedTrip!.dest_lng]
+                    : roadTrack[roadTrack.length - 1] ?? [0, 0]
+                );
+                const mapData = {
+                  roadTrack,
+                  evPoints: (() => {
+                    // For events with no GPS (e.g. MOVEMENT_STOP), borrow coords from the nearest event that has them
+                    let lastLat: number | null = null, lastLng: number | null = null;
+                    return evs.map(ev => {
+                      if (ev.latitude != null && ev.longitude != null) {
+                        lastLat = ev.latitude; lastLng = ev.longitude;
+                      }
+                      const lat = ev.latitude ?? lastLat;
+                      const lng = ev.longitude ?? lastLng;
+                      if (lat == null || lng == null) return null;
+                      return { lat, lng, color: eventColor(ev.event_type), label: EVENT_LABEL[ev.event_type] ?? ev.event_type, t: ev.occurred_at };
+                    }).filter((p): p is NonNullable<typeof p> => p !== null);
+                  })(),
+                  depotLat: depotPt[0],
+                  depotLng: depotPt[1],
+                  destLat:  destPt[0],
+                  destLng:  destPt[1],
+                  destName: selectedTrip!.dest_name ?? 'Destination',
+                  zones: geofences.map(z => ({ lat: z.lat, lng: z.lng, radius: z.radius, name: z.name, type: z.type })),
+                };
+
+                // ── Event table rows ─────────────────────────────────
+                const rows = displayEvs.map(ev => {
+                  const isStop     = ev.event_type === 'MOVEMENT_STOP';
+                  const isCritical = ['FUEL_THEFT','BATTERY_OFF'].includes(ev.event_type);
+                  const isFuel     = ['FUEL_FILL','FUEL_DRAIN','FUEL_THEFT'].includes(ev.event_type);
+                  const delta      = ev.value_before != null && ev.value_after != null ? ev.value_after - ev.value_before : null;
+                  const detail     = isStop && stopDurOf(ev) ? `Stopped ${stopDurOf(ev)}` : (ev.geofence_zone ?? '');
+                  const fuelStr    = isFuel && delta != null ? `${delta > 0 ? '+' : ''}${delta.toFixed(1)} L` : '';
+                  const dotColor   = eventColor(ev.event_type);
+                  const rowBg      = isCritical ? '#fff5f5' : isStop ? '#fffbeb' : 'transparent';
+                  const labelColor = isCritical ? '#b91c1c' : isStop ? '#b45309' : '#0f172a';
+                  return `<tr style="background:${rowBg}">
+                    <td style="color:#64748b;font-size:11px">${fmtTime12(ev.occurred_at)}</td>
+                    <td>
+                      <span style="display:inline-flex;align-items:center;gap:5px">
+                        <span style="width:8px;height:8px;border-radius:50%;background:${dotColor};flex-shrink:0;display:inline-block"></span>
+                        <span style="color:${labelColor};font-weight:600">${EVENT_LABEL[ev.event_type] ?? ev.event_type}</span>
+                      </span>
+                    </td>
+                    <td style="color:#64748b;font-size:12px">${detail}</td>
+                    <td style="font-weight:600;color:${fuelStr.startsWith('+') ? '#16a34a' : fuelStr ? '#dc2626' : '#94a3b8'}">${fuelStr || '—'}</td>
+                  </tr>`;
+                }).join('');
+
+                const hasMap = roadTrack.length >= 2;
+                const html = `<!DOCTYPE html><html><head>
+                  <meta charset="utf-8">
+                  <title>Trip #${tripNum} — ${selectedTrip!.dest_name ?? 'Trip Report'}</title>
+                  ${hasMap ? '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">' : ''}
+                  <style>
+                    *{box-sizing:border-box;margin:0;padding:0}
+                    body{font-family:system-ui,sans-serif;padding:32px 40px;color:#0f172a;font-size:13px}
+                    h1{font-size:20px;font-weight:700;margin-bottom:4px}
+                    .meta{color:#64748b;font-size:12px;line-height:1.8;margin-bottom:4px}
+                    .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;background:#dbeafe;color:#1d4ed8;margin-left:6px;vertical-align:middle}
+                    .divider{border:none;border-top:2px solid #e2e8f0;margin:14px 0}
+                    #map{width:720px;height:320px;border-radius:10px;border:1px solid #e2e8f0;margin-bottom:16px}
+                    .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:#64748b;margin-bottom:14px}
+                    .legend span{display:flex;align-items:center;gap:5px}
+                    .dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}
+                    table{width:100%;border-collapse:collapse}
+                    th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;padding:8px 10px;border-bottom:2px solid #e2e8f0}
+                    td{padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+                    .ms{background:#f8fafc;font-weight:600}
+                    .footer{margin-top:28px;font-size:11px;color:#94a3b8;text-align:right}
+                    @media print{body{padding:16px 20px}#map{height:320px;-webkit-print-color-adjust:exact;print-color-adjust:exact}@page{margin:.8cm;size:A4}}
+                  </style>
+                </head><body>
+                  <h1>Trip #${tripNum} — ${selectedTrip!.dest_name ?? 'Unknown'}<span class="badge">${STATUS_LABEL[selectedTrip!.status] ?? selectedTrip!.status}</span></h1>
+                  <div class="meta">${fmtDate(selectedTrip!.created_at)} &nbsp;·&nbsp; ${fmtTime12(selectedTrip!.created_at)} → ${fmtTime12(selectedTrip!.updated_at)}${dur ? ` &nbsp;·&nbsp; ${dur}` : ''}${km != null ? ` &nbsp;·&nbsp; ${km.toFixed(1)} km` : ''} &nbsp;·&nbsp; ${displayEvs.length} events</div>
+                  <hr class="divider">
+                  ${hasMap ? `
+                  <div id="map"></div>
+                  <div class="legend">
+                    <span><span class="dot" style="background:#7c3aed"></span>At Depot</span>
+                    <span><span class="dot" style="background:#0369a1"></span>At Station</span>
+                    <span><span class="dot" style="background:#dc2626"></span>Fuel Theft</span>
+                    <span><span class="dot" style="background:#ea580c"></span>Fuel Drain</span>
+                    <span><span class="dot" style="background:#16a34a"></span>Fuel Fill</span>
+                    <span><span class="dot" style="background:#f59e0b"></span>Stopped</span>
+                    <span><span class="dot" style="background:#ca8a04"></span>Engine</span>
+                    <span><span class="dot" style="background:#0d9488"></span>Power</span>
+                    <span><span class="dot" style="background:#059669"></span>Geofences</span>
+                  </div>` : ''}
+                  <table>
+                    <thead><tr><th>Time</th><th>Event</th><th>Detail</th><th>Fuel</th></tr></thead>
+                    <tbody>
+                      <tr class="ms"><td>${fmtTime12(departureTime)}</td><td>🏭 Left Depot</td><td>${selectedTrip!.origin_name ?? ''}</td><td>—</td></tr>
+                      ${rows}
+                      <tr class="ms"><td>${arrivalTime ? fmtTime12(arrivalTime) : '—'}</td><td>📍 ${hasArrived ? 'Arrived' : 'En Route…'}</td><td>${selectedTrip!.dest_name ?? ''}</td><td>—</td></tr>
+                    </tbody>
+                  </table>
+                  <div class="footer">Generated ${new Date().toLocaleString()}</div>
+                  ${hasMap ? `<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
+                  <script>
+                    var d = ${JSON.stringify(mapData)};
+                    var _map = null;
+                    var _centerLat = (d.depotLat + d.destLat) / 2;
+                    var _centerLng = (d.depotLng + d.destLng) / 2;
+                    var _bounds = [[d.depotLat, d.depotLng], [d.destLat, d.destLng]];
+                    function fitMap() {
+                      if (!_map) return;
+                      _map.invalidateSize(false);
+                      var z = _map.getBoundsZoom(L.latLngBounds(_bounds), false);
+                      _map.setView([_centerLat, _centerLng], Math.max(z + 0.499, 1), { animate: false });
+                    }
+                    window.onbeforeprint = fitMap;
+                    window.addEventListener('load', function() {
+                      setTimeout(function() {
+                        _map = L.map('map', { zoomControl: true, attributionControl: true });
+                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                          attribution: '© OpenStreetMap contributors', maxZoom: 19
+                        }).addTo(_map);
+                        _map.invalidateSize(false);
+                        var clean = d.roadTrack.filter(function(p) {
+                          return p[0] !== 0 && p[1] !== 0 && Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180;
+                        });
+                        // If OSRM/GPS track is sparse, build route from event GPS points (always valid)
+                        if (clean.length < 2 && d.evPoints.length >= 2) {
+                          var sorted = d.evPoints.slice().sort(function(a,b){ return a.t < b.t ? -1 : 1; });
+                          clean = sorted.map(function(p){ return [p.lat, p.lng]; });
+                        }
+                        // Last-resort: straight line depot→destination
+                        if (clean.length < 2) {
+                          clean = [[d.depotLat, d.depotLng], [d.destLat, d.destLng]];
+                        }
+                        L.polyline(clean, { color: '#3b82f6', weight: 5, opacity: 1 }).addTo(_map);
+                        var start = clean[0];
+                        var end   = clean[clean.length - 1];
+                        function makePin(color, label) {
+                          return L.divIcon({
+                            html: '<div style="display:flex;flex-direction:column;align-items:center">'
+                                + '<div style="width:18px;height:18px;border-radius:50%;background:' + color + ';border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.5)"></div>'
+                                + '<div style="background:' + color + ';color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.3)">' + label + '</div>'
+                                + '</div>',
+                            iconSize: [80, 44], iconAnchor: [9, 9], className: ''
+                          });
+                        }
+                        L.marker(start, { icon: makePin('#7c3aed', 'Depot') }).addTo(_map);
+                        L.marker(end,   { icon: makePin('#0369a1', d.destName) }).addTo(_map);
+                        // Geofence boundary circles
+                        d.zones.forEach(function(z) {
+                          var isDepot = z.type === 'depot';
+                          L.circle([z.lat, z.lng], {
+                            radius: z.radius,
+                            color:       isDepot ? '#7c3aed' : '#0369a1',
+                            weight:      2,
+                            opacity:     0.8,
+                            fillColor:   isDepot ? '#7c3aed' : '#0369a1',
+                            fillOpacity: 0.08,
+                            dashArray:   '6 4',
+                          }).bindTooltip(z.name, { permanent: false, direction: 'top' }).addTo(_map);
+                        });
+                        // Event dots
+                        d.evPoints.forEach(function(p) {
+                          if (!p.lat || !p.lng) return;
+                          L.circleMarker([p.lat, p.lng], {
+                            radius: 6, color: '#fff', weight: 1.5, fillColor: p.color, fillOpacity: 1
+                          }).addTo(_map);
+                        });
+                        fitMap();
+                        // Auto-print after tiles have had time to load
+                        setTimeout(function() { fitMap(); window.print(); }, 4000);
+                      }, 300);
+                    });
+                  <\/script>` : '<script>window.onload=function(){window.print()};<\/script>'}
+                </body></html>`;
+
+                const w = window.open('', '_blank');
+                if (w) { w.document.write(html); w.document.close(); }
+              }
+
+              return (
+                <div className="w-64 shrink-0 border-l border-slate-200 bg-white flex flex-col overflow-hidden">
+
+                  {/* Sidebar header */}
+                  <div className="px-4 py-3 border-b border-slate-100 shrink-0">
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5" style={{ background: selectedColor }} />
+                        <p className="text-[13px] font-bold text-slate-800 leading-tight truncate">
                           {selectedTrip.dest_name || 'Unknown Destination'}
                         </p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          {fmtDate(selectedTrip.created_at)} · {fmtTime12(selectedTrip.created_at)} → {fmtTime12(selectedTrip.updated_at)}
-                          {dur ? ` · ${dur}` : ''}
-                          {km != null ? ` · ${km.toFixed(1)} km` : ''}
-                        </p>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_STYLE[selectedTrip.status] ?? 'bg-slate-100 text-slate-600'}`}>
-                        {STATUS_LABEL[selectedTrip.status] ?? selectedTrip.status}
-                      </span>
-                      <span className="text-[11px] text-slate-400">{evs.length} events</span>
                       <button
                         onClick={() => setSelectedId(null)}
-                        className="text-slate-300 hover:text-slate-500 transition w-6 h-6 flex items-center justify-center rounded-full hover:bg-slate-100"
+                        className="shrink-0 text-slate-300 hover:text-slate-500 transition w-6 h-6 flex items-center justify-center rounded-full hover:bg-slate-100"
+                      >✕</button>
+                    </div>
+                    <p className="text-[10px] text-slate-400 font-mono pl-4">
+                      <span className="font-sans font-semibold text-slate-300 mr-1">Trip #{tripNum}</span>
+                      {fmtDate(selectedTrip.created_at)}
+                    </p>
+                    <p className="text-[10px] text-slate-400 font-mono pl-4 mt-0.5">
+                      {fmtTime12(selectedTrip.created_at)} → {fmtTime12(selectedTrip.updated_at)}
+                      {dur ? ` · ${dur}` : ''}
+                      {km != null ? ` · ${km.toFixed(1)} km` : ''}
+                    </p>
+                    <div className="flex items-center justify-between pl-4 mt-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${STATUS_STYLE[selectedTrip.status] ?? 'bg-slate-100 text-slate-600'}`}>
+                          {STATUS_LABEL[selectedTrip.status] ?? selectedTrip.status}
+                        </span>
+                        <span className="text-[10px] text-slate-400">{displayEvs.length} events</span>
+                      </div>
+                      <button
+                        onClick={printTripPDF}
+                        title="Download as PDF"
+                        className="text-[10px] font-semibold text-blue-500 hover:text-blue-700 flex items-center gap-1 transition"
                       >
-                        ✕
+                        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M8 2v9M4 7l4 4 4-4"/><path d="M2 13h12"/>
+                        </svg>
+                        PDF
                       </button>
                     </div>
                   </div>
 
-                  {/* Event cards — horizontal scroll */}
-                  <div className="overflow-x-auto h-[calc(100%-49px)]">
-                    {(() => {
-                      // Hide MOVEMENT_START — it's the companion event to every stop and adds noise.
-                      // Meaningful events are the stops, fuel changes, geofences, battery, ignition.
-                      const displayEvs = evs.filter(e => e.event_type !== 'MOVEMENT_START');
-                      if (displayEvs.length === 0) return (
-                        <div className="flex items-center justify-center h-full text-sm text-slate-400">
-                          No events recorded during this trip
-                        </div>
-                      );
+                  {/* Vertical timeline — scrolls top to bottom */}
+                  <div className="flex-1 overflow-y-auto py-3 px-3">
+
+                    {/* ── Depot milestone ── */}
+                    <div className="flex gap-2.5 mb-1">
+                      <div className="flex flex-col items-center shrink-0" style={{ width: 20 }}>
+                        <span className="text-sm leading-none">🏭</span>
+                        <div className="w-px flex-1 bg-violet-200 mt-1" />
+                      </div>
+                      <div className="pb-3 min-w-0">
+                        <p className="text-[11px] font-bold text-violet-700 leading-tight">Left Depot</p>
+                        <p className="text-[10px] text-slate-400 font-mono">{fmtTime12(departureTime)}</p>
+                        {selectedTrip.origin_name && (
+                          <p className="text-[10px] text-slate-500 truncate">{selectedTrip.origin_name}</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* ── Events ── */}
+                    {displayEvs.length === 0 ? (
+                      <p className="text-[11px] text-slate-400 italic pl-7 py-2">No events recorded</p>
+                    ) : displayEvs.map((ev, i) => {
+                      const color      = eventColor(ev.event_type);
+                      const isStop     = ev.event_type === 'MOVEMENT_STOP';
+                      const isCritical = ev.event_type === 'FUEL_THEFT';
+                      const isFuel     = ['FUEL_FILL','FUEL_DRAIN','FUEL_THEFT'].includes(ev.event_type);
+                      const isLast     = i === displayEvs.length - 1;
+                      const delta      = ev.value_before != null && ev.value_after != null
+                        ? ev.value_after - ev.value_before : null;
+
+                      let stopDuration = '';
+                      if (isStop) {
+                        const nextStart = evs.find(e =>
+                          e.event_type === 'MOVEMENT_START' &&
+                          new Date(e.occurred_at) > new Date(ev.occurred_at)
+                        );
+                        if (nextStart) {
+                          const mins = Math.round(
+                            (new Date(nextStart.occurred_at).getTime() - new Date(ev.occurred_at).getTime()) / 60000
+                          );
+                          stopDuration = mins < 1 ? '< 1 min' : mins < 60 ? `${mins} min` : `${Math.floor(mins/60)}h ${mins%60}m`;
+                        }
+                      }
+
                       return (
-                        <div className="flex gap-2 px-3 py-2.5 h-full" style={{ width: 'max-content' }}>
-                          {displayEvs.map((ev, idx) => {
-                            const color      = eventColor(ev.event_type);
-                            const isStop     = ev.event_type === 'MOVEMENT_STOP';
-                            const isCritical = ev.event_type === 'FUEL_THEFT';
-                            const delta      = ev.value_before != null && ev.value_after != null
-                              ? ev.value_after - ev.value_before : null;
+                        <div key={ev.id} className="flex gap-2.5 mb-1">
+                          {/* Timeline dot + line */}
+                          <div className="flex flex-col items-center shrink-0" style={{ width: 20 }}>
+                            <span
+                              className="w-3 h-3 rounded-full shrink-0 border-2 border-white shadow-sm mt-0.5"
+                              style={{ background: color }}
+                            />
+                            {!isLast && <div className="w-px flex-1 bg-slate-200 mt-0.5" />}
+                          </div>
 
-                            // For MOVEMENT_STOP: find the next MOVEMENT_START to calculate how long the truck was stopped
-                            let stopDuration = '';
-                            if (isStop) {
-                              const nextStart = evs.find(e =>
-                                e.event_type === 'MOVEMENT_START' &&
-                                new Date(e.occurred_at) > new Date(ev.occurred_at)
-                              );
-                              if (nextStart) {
-                                const mins = Math.round(
-                                  (new Date(nextStart.occurred_at).getTime() - new Date(ev.occurred_at).getTime()) / 60000
-                                );
-                                stopDuration = mins < 1 ? '< 1 min' : mins < 60 ? `${mins} min` : `${Math.floor(mins/60)}h ${mins%60}m`;
-                              }
-                            }
-
-                            return (
-                              <div
-                                key={ev.id}
-                                className={`flex flex-col rounded-xl border overflow-hidden shrink-0 ${
-                                  isCritical ? 'border-red-200 bg-red-50'
-                                  : isStop    ? 'border-amber-200 bg-amber-50'
-                                  : 'border-slate-100 bg-slate-50'
-                                }`}
-                                style={{ width: 150 }}
-                              >
-                                {/* Color top bar */}
-                                <div className="h-1.5 w-full shrink-0" style={{ background: color }} />
-
-                                <div className="flex-1 px-3 py-2 flex flex-col gap-1">
-                                  {/* Icon + label */}
-                                  <div className="flex items-start gap-1.5">
-                                    <span className="text-base leading-none mt-px">
-                                      {EVENT_ICON[ev.event_type] ?? '•'}
-                                    </span>
-                                    <p className={`text-[11px] font-bold leading-tight ${
-                                      isCritical ? 'text-red-700' : isStop ? 'text-amber-700' : 'text-slate-700'
-                                    }`}>
-                                      {EVENT_LABEL[ev.event_type] ?? ev.event_type}
-                                    </p>
-                                  </div>
-
-                                  {/* Time */}
-                                  <p className="text-[11px] text-slate-500 font-mono">
-                                    {fmtTime12(ev.occurred_at)}
-                                  </p>
-
-                                  {/* Stop duration */}
-                                  {stopDuration && (
-                                    <p className="text-[11px] font-bold text-amber-600">
-                                      Stopped {stopDuration}
-                                    </p>
-                                  )}
-
-                                  {/* Zone name */}
-                                  {ev.geofence_zone && (
-                                    <p className="text-[10px] text-slate-500 truncate">{ev.geofence_zone}</p>
-                                  )}
-
-                                  {/* Fuel delta */}
-                                  {delta != null && (
-                                    <p className={`text-[11px] font-bold ${delta > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                      {delta > 0 ? '+' : ''}{delta.toFixed(1)} L
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
+                          {/* Content */}
+                          <div className={`pb-3 min-w-0 flex-1 ${
+                            isCritical ? 'bg-red-50 rounded-lg px-2 py-1.5 -mx-1' :
+                            isStop     ? 'bg-amber-50 rounded-lg px-2 py-1.5 -mx-1' : ''
+                          }`}>
+                            <div className="flex items-start gap-1">
+                              <span className="text-sm leading-none shrink-0">{EVENT_ICON[ev.event_type] ?? '•'}</span>
+                              <p className={`text-[11px] font-bold leading-tight ${
+                                isCritical ? 'text-red-700' : isStop ? 'text-amber-700' : 'text-slate-700'
+                              }`}>
+                                {EVENT_LABEL[ev.event_type] ?? ev.event_type}
+                              </p>
+                            </div>
+                            <p className="text-[10px] text-slate-400 font-mono mt-0.5">{fmtTime12(ev.occurred_at)}</p>
+                            {stopDuration && (
+                              <p className="text-[10px] font-semibold text-amber-600 mt-0.5">Stopped {stopDuration}</p>
+                            )}
+                            {ev.geofence_zone && (
+                              <p className="text-[10px] text-slate-500 truncate mt-0.5">{ev.geofence_zone}</p>
+                            )}
+                            {isFuel && delta != null && (
+                              <p className={`text-[11px] font-bold mt-0.5 ${delta > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {delta > 0 ? '+' : ''}{delta.toFixed(1)} L
+                              </p>
+                            )}
+                          </div>
                         </div>
                       );
-                    })()}
-                  </div>
+                    })}
 
+                    {/* ── Destination milestone ── */}
+                    <div className="flex gap-2.5">
+                      <div className="flex flex-col items-center shrink-0" style={{ width: 20 }}>
+                        <span className="text-sm leading-none">📍</span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className={`text-[11px] font-bold leading-tight ${hasArrived ? 'text-blue-700' : 'text-slate-400'}`}>
+                          {hasArrived ? 'Arrived' : 'En Route…'}
+                        </p>
+                        {arrivalTime && <p className="text-[10px] text-slate-400 font-mono">{fmtTime12(arrivalTime)}</p>}
+                        <p className="text-[10px] text-slate-500 truncate">{selectedTrip.dest_name}</p>
+                        {!hasArrived && <p className="text-[10px] text-slate-400 italic">Not yet arrived</p>}
+                      </div>
+                    </div>
+
+                  </div>
                 </div>
               );
             })()}
