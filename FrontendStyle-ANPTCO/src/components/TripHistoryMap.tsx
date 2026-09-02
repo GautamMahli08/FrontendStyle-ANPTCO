@@ -45,19 +45,21 @@ export interface GeofenceZone {
 
 const DEFAULT_CENTER: [number, number] = [23.5937, 58.5];
 
-function AutoFit({ routes }: { routes: TripRoute[] }) {
+function FitSelected({ selected, allRoutes }: { selected: TripRoute | null; allRoutes: TripRoute[] }) {
   const map    = useMap();
-  const fitted = useRef(false);
+  const lastId = useRef<string | null>(null);
   useEffect(() => {
-    if (fitted.current || routes.length === 0) return;
-    fitted.current = true;
-    const pts: [number, number][] = routes.flatMap(r => [
-      [r.originLat, r.originLng],
-      [r.destLat,   r.destLng],
-    ]);
-    if (pts.length <= 2) { map.setView(pts[0], 12); return; }
+    const target = selected ?? allRoutes[0] ?? null;
+    if (!target || target.id === lastId.current) return;
+    lastId.current = target.id;
+    const pts: [number, number][] = [
+      [target.originLat, target.originLng],
+      [target.destLat,   target.destLng],
+      ...target.gpsTrack,
+    ];
+    if (pts.length === 1) { map.setView(pts[0], 12); return; }
     map.fitBounds(L.latLngBounds(pts), { padding: [56, 56] });
-  }, [routes, map]);
+  }, [selected, allRoutes, map]);
   return null;
 }
 
@@ -281,7 +283,7 @@ export default function TripHistoryMap({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
         url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
       />
-      <AutoFit routes={routes} />
+      <FitSelected selected={selected} allRoutes={routes} />
 
       {/* Geofence zones — rendered first so route lines appear on top */}
       {geofences.map(g => {
@@ -315,7 +317,8 @@ export default function TripHistoryMap({
         );
       })}
 
-      {unselected.map(r => (
+      {/* Only show other routes when nothing is selected — selecting a trip focuses the map on that trip only */}
+      {!selectedId && unselected.map(r => (
         <TripRouteLayer
           key={r.id}
           r={r}

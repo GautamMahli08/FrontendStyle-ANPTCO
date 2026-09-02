@@ -243,7 +243,9 @@ export default function TripHistoryPage() {
       api.trucks.list(),
       api.depots.list(),
     ]).then(([t, e, tr, d]) => {
-      setTrips((t ?? []).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
+      const sorted = (t ?? []).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      setTrips(sorted);
+      setSelectedId(sorted[0]?.id ?? null);
       setEvents(e ?? []);
       setTrucks(tr ?? []);
       setDepot((d ?? [])[0] ?? null);
@@ -394,11 +396,12 @@ export default function TripHistoryPage() {
       zones.push({ id: `saved-${savedDest.id}`, lat: savedDest.lat, lng: savedDest.lng,
         radius: savedDest.radius, name: savedDest.name, type: 'station' });
     }
-    // Only show destination circles for trips that are actually rendered as routes on the map.
-    // Use trip id as key to guarantee uniqueness; deduplicate overlapping locations by proximity.
-    const routeIds = new Set(routes.map(r => r.id));
-    for (const t of trips) {
-      if (!routeIds.has(t.id)) continue;
+    // When a trip is selected show only its destination; otherwise show all rendered trip destinations.
+    const routeIds   = new Set(routes.map(r => r.id));
+    const tripsToPin = selectedId
+      ? trips.filter(t => t.id === selectedId)
+      : trips.filter(t => routeIds.has(t.id));
+    for (const t of tripsToPin) {
       if (!t.dest_lat || !t.dest_lng || !t.dest_name) continue;
       const tooClose = zones.some(z => haversineKm(z.lat, z.lng, t.dest_lat, t.dest_lng) < 0.5);
       if (tooClose) continue;
@@ -406,7 +409,7 @@ export default function TripHistoryPage() {
         lng: t.dest_lng, radius: 300, name: t.dest_name, type: 'station' });
     }
     return zones;
-  }, [depot, trips, routes]);
+  }, [depot, trips, routes, selectedId]);
 
   const depotLat = depot?.latitude;
   const depotLng = depot?.longitude;
@@ -907,7 +910,9 @@ export default function TripHistoryPage() {
                   const isFuel     = ['FUEL_FILL','FUEL_DRAIN','FUEL_THEFT'].includes(ev.event_type);
                   const delta      = ev.value_before != null && ev.value_after != null ? ev.value_after - ev.value_before : null;
                   const detail     = isStop && stopDurOf(ev) ? `Stopped ${stopDurOf(ev)}` : (ev.geofence_zone ?? '');
-                  const fuelStr    = isFuel && delta != null ? `${delta > 0 ? '+' : ''}${delta.toFixed(1)} L` : '';
+                  const fuelStr    = isFuel && delta != null
+                    ? `${delta > 0 ? '+' : ''}${delta.toFixed(1)} L → ${ev.value_after!.toFixed(1)} L`
+                    : '';
                   const dotColor   = eventColor(ev.event_type);
                   const rowBg      = isCritical ? '#fff5f5' : isStop ? '#fffbeb' : 'transparent';
                   const labelColor = isCritical ? '#b91c1c' : isStop ? '#b45309' : '#0f172a';
@@ -923,6 +928,36 @@ export default function TripHistoryPage() {
                     <td style="font-weight:600;color:${fuelStr.startsWith('+') ? '#16a34a' : fuelStr ? '#dc2626' : '#94a3b8'}">${fuelStr || '—'}</td>
                   </tr>`;
                 }).join('');
+
+                // ── Fuel summary ──────────────────────────────────────────────
+                const eventsWithFuelVals = evs.filter(e => e.value_before != null && e.value_after != null);
+                const startFuel  = eventsWithFuelVals[0]?.value_before ?? null;
+                const endFuel    = eventsWithFuelVals[eventsWithFuelVals.length - 1]?.value_after ?? null;
+                const totalFilled  = evs
+                  .filter(e => e.event_type === 'FUEL_FILL' && e.value_before != null && e.value_after != null)
+                  .reduce((s, e) => s + (e.value_after! - e.value_before!), 0);
+                const totalDrained = evs
+                  .filter(e => ['FUEL_DRAIN','FUEL_THEFT'].includes(e.event_type) && e.value_before != null && e.value_after != null)
+                  .reduce((s, e) => s + Math.abs(e.value_after! - e.value_before!), 0);
+                const hasFuelData = eventsWithFuelVals.length > 0;
+                const pdfTruck    = truckById.get(selectedTrip!.truck_id);
+                const pdfLiveFuel = pdfTruck
+                  ? (pdfTruck.compartment_fuel && Object.keys(pdfTruck.compartment_fuel).length > 0
+                      ? [1,2,3,4].reduce((s, i) => s + (pdfTruck.compartment_fuel![String(i)] ?? 0), 0)
+                      : pdfTruck.total_fuel_liters ?? null)
+                  : null;
+
+                // ── Last known / current position ─────────────────────────────
+                const lastGpsEv = [...evs].reverse().find(e => e.latitude != null && e.longitude != null) ?? null;
+                let positionAddress = '';
+                if (lastGpsEv) {
+                  try {
+                    const geoRes  = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lastGpsEv.latitude}&lon=${lastGpsEv.longitude}&format=json`);
+                    const geoData = await geoRes.json();
+                    positionAddress = (geoData.display_name as string ?? '').replace(/,\s*\d{6,}[^,]*/g, '').trim();
+                  } catch { /* coords only */ }
+                }
+                const positionLabel = selectedTrip!.status === 'EN_ROUTE' ? 'Current Position' : 'Last Known Position';
 
                 const hasMap = roadTrack.length >= 2;
                 const html = `<!DOCTYPE html><html><head>
@@ -945,12 +980,38 @@ export default function TripHistoryPage() {
                     td{padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top}
                     .ms{background:#f8fafc;font-weight:600}
                     .footer{margin-top:28px;font-size:11px;color:#94a3b8;text-align:right}
+                    .fuel-row{display:flex;gap:10px;margin-bottom:14px}
+                    .fuel-box{flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:9px 12px}
+                    .fuel-box.green{background:#f0fdf4;border-color:#86efac}
+                    .fuel-box.red{background:#fff5f5;border-color:#fca5a5}
+                    .fuel-box-label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;margin-bottom:3px}
+                    .fuel-box-val{font-size:17px;font-weight:700;color:#0f172a}
+                    .fuel-box.green .fuel-box-val{color:#16a34a}
+                    .fuel-box.red .fuel-box-val{color:#dc2626}
+                    .pos-section{margin-top:18px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px}
+                    .pos-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:7px;display:flex;align-items:center;gap:8px}
+                    .pos-badge{padding:2px 8px;border-radius:999px;font-size:9px;font-weight:700}
+                    .pos-badge.live{background:#dcfce7;color:#16a34a}
+                    .pos-badge.done{background:#dbeafe;color:#1d4ed8}
+                    .pos-coords{font-family:monospace;font-size:12px;color:#0f172a;margin-bottom:2px}
+                    .pos-addr{font-size:11px;color:#475569;line-height:1.5}
+                    .pos-ts{font-size:10px;color:#94a3b8;margin-top:4px}
                     @media print{body{padding:16px 20px}#map{height:320px;-webkit-print-color-adjust:exact;print-color-adjust:exact}@page{margin:.8cm;size:A4}}
                   </style>
                 </head><body>
                   <h1>Trip #${tripNum} — ${selectedTrip!.dest_name ?? 'Unknown'}<span class="badge">${STATUS_LABEL[selectedTrip!.status] ?? selectedTrip!.status}</span></h1>
                   <div class="meta">${fmtDate(selectedTrip!.created_at)} &nbsp;·&nbsp; ${fmtTime12(selectedTrip!.created_at)} → ${fmtTime12(selectedTrip!.updated_at)}${dur ? ` &nbsp;·&nbsp; ${dur}` : ''}${km != null ? ` &nbsp;·&nbsp; ${km.toFixed(1)} km` : ''} &nbsp;·&nbsp; ${displayEvs.length} events</div>
                   <hr class="divider">
+                  ${hasFuelData ? `<div class="fuel-row">
+                    ${startFuel != null ? `<div class="fuel-box"><div class="fuel-box-label">Starting Fuel</div><div class="fuel-box-val">${startFuel.toFixed(1)} L</div></div>` : ''}
+                    ${totalFilled > 0 ? `<div class="fuel-box green"><div class="fuel-box-label">Filled</div><div class="fuel-box-val">+${totalFilled.toFixed(1)} L</div></div>` : ''}
+                    ${totalDrained > 0 ? `<div class="fuel-box red"><div class="fuel-box-label">Drained / Theft</div><div class="fuel-box-val">−${totalDrained.toFixed(1)} L</div></div>` : ''}
+                    ${endFuel != null ? `<div class="fuel-box"><div class="fuel-box-label">Ending Fuel</div><div class="fuel-box-val">${endFuel.toFixed(1)} L</div></div>` : ''}
+                    ${pdfLiveFuel != null ? `<div class="fuel-box" style="border-color:#bfdbfe;background:#eff6ff"><div class="fuel-box-label" style="color:#3b82f6">Current Tank</div><div class="fuel-box-val" style="color:#1d4ed8">${pdfLiveFuel.toFixed(1)} L</div></div>` : ''}
+                  </div>` : `<div style="font-size:11px;color:#94a3b8;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between">
+                    <span>No fuel sensor events recorded for this trip.</span>
+                    ${pdfLiveFuel != null ? `<span style="font-size:13px;font-weight:700;color:#1d4ed8">⛽ ${pdfLiveFuel.toFixed(1)} L</span>` : ''}
+                  </div>`}
                   ${hasMap ? `
                   <div id="map"></div>
                   <div class="legend">
@@ -964,14 +1025,23 @@ export default function TripHistoryPage() {
                     <span><span class="dot" style="background:#0d9488"></span>Power</span>
                     <span><span class="dot" style="background:#059669"></span>Geofences</span>
                   </div>` : ''}
+                  <p style="font-size:10px;color:#94a3b8;margin:0 0 10px">
+                    <strong style="color:#64748b">Fuel column</strong> — shows <em>change → tank level after</em> (e.g. +5.2 L → 45.1 L) only for fill, drain, or theft events. A dash (—) means no fuel event at that moment; it does not indicate a sensor fault.
+                  </p>
                   <table>
                     <thead><tr><th>Time</th><th>Event</th><th>Detail</th><th>Fuel</th></tr></thead>
                     <tbody>
                       <tr class="ms"><td>${fmtTime12(departureTime)}</td><td>🏭 Left Depot</td><td>${selectedTrip!.origin_name ?? ''}</td><td>—</td></tr>
                       ${rows}
-                      <tr class="ms"><td>${arrivalTime ? fmtTime12(arrivalTime) : '—'}</td><td>📍 ${hasArrived ? 'Arrived' : 'En Route…'}</td><td>${selectedTrip!.dest_name ?? ''}</td><td>—</td></tr>
+                      <tr class="ms"><td>${arrivalTime ? fmtTime12(arrivalTime) : '—'}</td><td>📍 ${hasArrived ? 'Arrived' : 'En Route…'}</td><td>${selectedTrip!.dest_name ?? ''}</td><td style="color:#1d4ed8;font-weight:700">${pdfLiveFuel != null ? pdfLiveFuel.toFixed(1) + ' L' : '—'}</td></tr>
                     </tbody>
                   </table>
+                  ${lastGpsEv ? `<div class="pos-section">
+                    <div class="pos-title">${positionLabel}<span class="pos-badge ${selectedTrip!.status === 'EN_ROUTE' ? 'live' : 'done'}">${selectedTrip!.status === 'EN_ROUTE' ? '● En Route' : STATUS_LABEL[selectedTrip!.status] ?? selectedTrip!.status}</span></div>
+                    <div class="pos-coords">${lastGpsEv.latitude?.toFixed(6)}°N, ${lastGpsEv.longitude?.toFixed(6)}°E</div>
+                    ${positionAddress ? `<div class="pos-addr">${positionAddress}</div>` : ''}
+                    <div class="pos-ts">Updated: ${fmtTime12(lastGpsEv.occurred_at)}</div>
+                  </div>` : ''}
                   <div class="footer">Generated ${new Date().toLocaleString()}</div>
                   ${hasMap ? `<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
                   <script>
@@ -1174,9 +1244,14 @@ export default function TripHistoryPage() {
                               <p className="text-[10px] text-slate-500 truncate mt-0.5">{ev.geofence_zone}</p>
                             )}
                             {isFuel && delta != null && (
-                              <p className={`text-[11px] font-bold mt-0.5 ${delta > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                {delta > 0 ? '+' : ''}{delta.toFixed(1)} L
-                              </p>
+                              <>
+                                <p className={`text-[11px] font-bold mt-0.5 ${delta > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {delta > 0 ? '+' : ''}{delta.toFixed(1)} L
+                                </p>
+                                {ev.value_after != null && (
+                                  <p className="text-[10px] text-slate-500 mt-0">Tank: {ev.value_after.toFixed(1)} L</p>
+                                )}
+                              </>
                             )}
                           </div>
                         </div>
