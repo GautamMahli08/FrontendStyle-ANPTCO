@@ -390,11 +390,14 @@ export default function TripHistoryPage() {
       zones.push({ id: depot.id, lat: depot.latitude, lng: depot.longitude,
         radius: depot.radius_meters, name: depot.name, type: 'depot' });
     }
-    // Active saved destination from fleet monitor (localStorage)
-    const savedDest = getActiveDest(loadDestinations(), loadActiveDestId());
-    if (savedDest) {
-      zones.push({ id: `saved-${savedDest.id}`, lat: savedDest.lat, lng: savedDest.lng,
-        radius: savedDest.radius, name: savedDest.name, type: 'station' });
+    // Active saved destination from fleet monitor (localStorage) — only in overview mode,
+    // never while a specific trip is selected, so old trips don't show today's active target.
+    if (!selectedId) {
+      const savedDest = getActiveDest(loadDestinations(), loadActiveDestId());
+      if (savedDest) {
+        zones.push({ id: `saved-${savedDest.id}`, lat: savedDest.lat, lng: savedDest.lng,
+          radius: savedDest.radius, name: savedDest.name, type: 'station' });
+      }
     }
     // When a trip is selected show only its destination; otherwise show all rendered trip destinations.
     const routeIds   = new Set(routes.map(r => r.id));
