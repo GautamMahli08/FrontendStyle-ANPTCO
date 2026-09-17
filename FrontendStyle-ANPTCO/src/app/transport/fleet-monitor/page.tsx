@@ -556,6 +556,49 @@ export default function TransportFleetMonitorPage() {
                 </div>
               </div>
 
+              {/* ── Active Trips card — every truck's current in-progress trip, from
+                   anyone's session, so a newly created trip can be switched to here ── */}
+              {latestActiveTripByTruck.size > 0 && (
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-100">
+                    <p className="text-sm font-semibold text-slate-700">Active Trips</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Click a trip to focus the map on it</p>
+                  </div>
+                  <div className="max-h-56 overflow-y-auto divide-y divide-slate-50">
+                    {Array.from(latestActiveTripByTruck.values()).map(t => {
+                      const truck     = trucks.find(tr => tr.id === t.truck_id);
+                      const isFocused = t.truck_id === destTruck;
+                      const statusLabel: Record<string, string> = {
+                        LOADING: 'Loading', LOADED: 'Loaded', EN_ROUTE: 'In Transit',
+                        ARRIVED: 'Arrived', DELIVERY_ACCEPTED: 'Delivered',
+                      };
+                      return (
+                        <button
+                          key={t.id}
+                          onClick={() => setDestTruck(t.truck_id)}
+                          className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition ${isFocused ? 'bg-blue-50' : 'hover:bg-slate-50'}`}
+                        >
+                          <span className="w-3.5 h-3.5 rounded-full border-2 shrink-0 border-green-500 bg-green-500" />
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-[12px] font-semibold truncate ${isFocused ? 'text-blue-700' : 'text-slate-700'}`}>
+                              {t.dest_name}
+                            </p>
+                            <p className="text-[9px] font-mono text-slate-400">
+                              {truck?.device_id ?? t.truck_id.slice(0, 8)} · {statusLabel[t.status] ?? t.status}
+                            </p>
+                          </div>
+                          {isFocused && (
+                            <span className="text-[9px] font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-full shrink-0">
+                              FOCUSED
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* ── Dispatch card ── */}
               <div className="bg-white rounded-xl border border-slate-200">
                 <div className="px-4 py-3 border-b border-slate-100 flex items-start justify-between gap-2">
