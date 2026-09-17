@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
@@ -257,22 +257,36 @@ export default function TripHistoryPage() {
     return days;
   }, [calViewDate]);
 
-  useEffect(() => {
-    if (!user) { router.replace('/auth/login'); return; }
-    Promise.all([
-      api.trips.list(),
-      api.fleet.events(),
-      api.trucks.list(),
-      api.depots.list(),
-    ]).then(([t, e, tr, d]) => {
+  // isInitial only auto-selects the newest trip and drives the loading spinner —
+  // periodic refreshes must not reset whichever trip the user has selected.
+  const loadData = useCallback(async (isInitial: boolean) => {
+    try {
+      const [t, e, tr, d] = await Promise.all([
+        api.trips.list(),
+        api.fleet.events(),
+        api.trucks.list(),
+        api.depots.list(),
+      ]);
       const sorted = (t ?? []).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setTrips(sorted);
-      setSelectedId(sorted[0]?.id ?? null);
+      if (isInitial) setSelectedId(sorted[0]?.id ?? null);
       setEvents(e ?? []);
       setTrucks(tr ?? []);
       setDepot((d ?? [])[0] ?? null);
-    }).finally(() => setLoading(false));
-  }, [router, user]);
+    } finally {
+      if (isInitial) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) { router.replace('/auth/login'); return; }
+    loadData(true);
+    // Trip History has no live-tracking assumption elsewhere in the page, but an
+    // in-progress trip's route/current-position should still keep pace with the
+    // truck without requiring a manual reload.
+    const interval = setInterval(() => loadData(false), 15_000);
+    return () => clearInterval(interval);
+  }, [router, user, loadData]);
 
   async function deleteTrip(ev: React.MouseEvent, tripId: string) {
     ev.stopPropagation();
