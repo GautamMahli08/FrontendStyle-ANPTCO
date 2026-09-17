@@ -68,6 +68,49 @@ function FitSelected({ selected, allRoutes }: { selected: TripRoute | null; allR
   return null;
 }
 
+// Faded background reference showing the full planned road route from origin
+// to destination via a simple 2-point OSRM call. Purely context — the actual
+// recorded GPS trail draws on top of this as the real, ground-truth highlight,
+// so the two together read as "planned path" vs "what actually happened".
+function PlannedRouteLayer({
+  fromLat, fromLng, toLat, toLng,
+}: {
+  fromLat: number; fromLng: number; toLat: number; toLng: number;
+}) {
+  const straight: [number, number][] = [[fromLat, fromLng], [toLat, toLng]];
+  const [route, setRoute] = useState<[number, number][] | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const url =
+          `https://router.project-osrm.org/route/v1/driving/` +
+          `${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson`;
+        const res  = await fetch(url, { signal: ctrl.signal });
+        const data = await res.json();
+        const coords: number[][] | undefined = data.routes?.[0]?.geometry?.coordinates;
+        if (coords && coords.length > 0) {
+          setRoute(coords.map(([lng, lat]) => [lat, lng] as [number, number]));
+        }
+      } catch (e) {
+        if ((e as Error).name !== 'AbortError') console.warn('[TripHistoryMap] planned-route OSRM failed:', (e as Error).message);
+      }
+    }, 300);
+    return () => { clearTimeout(timer); ctrl.abort(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromLat, fromLng, toLat, toLng]);
+
+  const pts = route ?? straight;
+
+  return (
+    <Polyline
+      positions={pts}
+      pathOptions={{ color: '#94a3b8', weight: 3, opacity: 0.45, dashArray: '2 8', lineCap: 'round' }}
+    />
+  );
+}
+
 // Draws the remaining leg — current position straight to the destination via a
 // simple 2-point OSRM call. Deliberately doesn't try to reconstruct history
 // (that's gpsTrack's job): exactly the same approach FleetMap's RoutePolyline
@@ -293,6 +336,16 @@ export default function TripHistoryMap({
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <FitSelected selected={selected} allRoutes={routes} />
+
+      {/* Faded planned route (origin → destination) — drawn first so the real
+          GPS trail highlights on top of it */}
+      {selected && (
+        <PlannedRouteLayer
+          key={`planned-${selected.id}`}
+          fromLat={selected.originLat} fromLng={selected.originLng}
+          toLat={selected.destLat}     toLng={selected.destLng}
+        />
+      )}
 
       {/* Geofence zones — rendered first so route lines appear on top */}
       {geofences.map(g => {
