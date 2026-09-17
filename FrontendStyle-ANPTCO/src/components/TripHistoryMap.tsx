@@ -206,10 +206,24 @@ function TripRouteLayer({
       const latSpan = Math.max(...lats) - Math.min(...lats);
       const lngSpan = Math.max(...lngs) - Math.min(...lngs);
       if (latSpan > 0.01 || lngSpan > 0.01) {
-        const step   = Math.max(1, Math.floor(r.gpsTrack.length / 12));
-        const sample: [number, number][] = [r.gpsTrack[0]];
-        for (let i = step; i < r.gpsTrack.length - 1; i += step) sample.push(r.gpsTrack[i]);
-        sample.push(r.gpsTrack[r.gpsTrack.length - 1]);
+        const step    = Math.max(1, Math.floor(r.gpsTrack.length / 12));
+        const indices = new Set<number>([0, r.gpsTrack.length - 1]);
+        for (let i = step; i < r.gpsTrack.length - 1; i += step) indices.add(i);
+
+        // Force every recorded stop's nearest track point into the route so the
+        // road-snapped line actually passes through where the truck stopped,
+        // not just wherever the sparse even-interval sampling happened to land.
+        for (const ev of r.events) {
+          if (ev.eventType !== 'MOVEMENT_STOP') continue;
+          let bestIdx = -1, bestDist = Infinity;
+          r.gpsTrack.forEach(([lat, lng], i) => {
+            const d = Math.abs(lat - ev.lat) + Math.abs(lng - ev.lng);
+            if (d < bestDist) { bestDist = d; bestIdx = i; }
+          });
+          if (bestIdx >= 0) indices.add(bestIdx);
+        }
+
+        const sample = Array.from(indices).sort((a, b) => a - b).map(i => r.gpsTrack[i]);
         return sample.map(([lat, lng]) => `${lng},${lat}`).join(';');
       }
     }
@@ -280,8 +294,8 @@ export default function TripHistoryMap({
       scrollWheelZoom
     >
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <FitSelected selected={selected} allRoutes={routes} />
 
