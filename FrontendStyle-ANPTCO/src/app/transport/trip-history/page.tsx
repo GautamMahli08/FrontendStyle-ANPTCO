@@ -328,7 +328,6 @@ export default function TripHistoryPage() {
   // Sorted oldest→newest so the polyline traces the journey in order.
   function tripGpsTrack(trip: ApiTrip): [number, number][] {
     const evs = tripEvents(trip).filter(e => e.latitude != null && e.longitude != null);
-    if (evs.length === 0) return [];
 
     const pts: [number, number][] = [];
     let prevLat = NaN, prevLng = NaN;
@@ -340,6 +339,23 @@ export default function TripHistoryPage() {
       pts.push([lat, lng]);
       prevLat = lat; prevLng = lng;
     }
+
+    // asset_events only fires on state transitions (stop/start, fuel change,
+    // geofence crossing) — a truck driving steadily with none of those barely
+    // shows up here even though it's covered real distance. Append the truck's
+    // continuously-updated live position (same source Fleet Monitor uses) so
+    // the trail always reaches where the truck actually is right now, not
+    // just its last recorded transition.
+    const isLatestActive = !['COMPLETED', 'CANCELLED'].includes(trip.status)
+      && latestActiveTripIdByTruck.get(trip.truck_id) === trip.id;
+    if (isLatestActive) {
+      const liveTruck = truckById.get(trip.truck_id);
+      if (liveTruck?.latitude != null && liveTruck?.longitude != null &&
+          (Math.abs(liveTruck.latitude - prevLat) > 0.00001 || Math.abs(liveTruck.longitude - prevLng) > 0.00001)) {
+        pts.push([liveTruck.latitude, liveTruck.longitude]);
+      }
+    }
+
     return pts;
   }
 
@@ -356,7 +372,22 @@ export default function TripHistoryPage() {
         (t.origin_lat != null && t.origin_lng != null)
       )
       .flatMap((t, i) => {
-        const track = tripGpsTrack(t);
+        let track = tripGpsTrack(t);
+        // A freshly dispatched or transition-free trip can have 0–1 asset_events
+        // yet to fire, which would otherwise drop the whole route (planned
+        // background + remaining-ahead segment included) until the truck stops
+        // or crosses a geofence. Fall back to origin -> live position so an
+        // active trip still renders as soon as the truck has actually moved.
+        if (track.length < 2) {
+          const isLatestActive = !['COMPLETED', 'CANCELLED'].includes(t.status)
+            && latestActiveTripIdByTruck.get(t.truck_id) === t.id;
+          const liveTruck = truckById.get(t.truck_id);
+          const oLat = depotLat ?? t.origin_lat;
+          const oLng = depotLng ?? t.origin_lng;
+          if (isLatestActive && liveTruck?.latitude != null && liveTruck?.longitude != null && oLat != null && oLng != null) {
+            track = [[oLat, oLng], [liveTruck.latitude, liveTruck.longitude]];
+          }
+        }
         if (track.length < 2) return [];
         const evs = tripEvents(t);
         return [{
