@@ -197,6 +197,9 @@ function TripRouteLayer({
 }) {
   const straight: [number, number][] = [[r.originLat, r.originLng], [r.destLat, r.destLng]];
   const [roadPts, setRoadPts] = useState<[number, number][] | null>(null);
+  // Which waypoints string roadPts was fetched for — lets us tell a fresh,
+  // up-to-date route apart from a stale one still waiting on a re-fetch.
+  const [roadPtsFor, setRoadPtsFor] = useState<string | null>(null);
 
   // Build waypoint string: GPS span check to avoid depot-cluster-only routes
   const waypoints = (() => {
@@ -242,6 +245,7 @@ function TripRouteLayer({
         const coords: number[][] | undefined = data.routes?.[0]?.geometry?.coordinates;
         if (coords && coords.length > 0) {
           setRoadPts(coords.map(([lng, lat]) => [lat, lng] as [number, number]));
+          setRoadPtsFor(waypoints);
         }
       } catch (e) {
         if ((e as Error).name !== 'AbortError') console.warn('[TripHistoryMap] OSRM failed:', r.id, (e as Error).message);
@@ -251,8 +255,14 @@ function TripRouteLayer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waypoints]);
 
-  const pts    = roadPts ?? (r.gpsTrack.length >= 2 ? r.gpsTrack : straight);
-  const routed = !!roadPts;
+  // New telemetry (polled every 15s) extends gpsTrack and changes waypoints —
+  // roadPts from the previous fetch is now stale for the new points. Fall back
+  // to the raw/dashed line (RouteLayer's routed=false styling) until the fresh
+  // OSRM fetch for the updated waypoints resolves, rather than showing an
+  // outdated "final" line that then jumps once the new one lands.
+  const isFresh = roadPts != null && roadPtsFor === waypoints;
+  const pts     = isFresh ? roadPts! : (r.gpsTrack.length >= 2 ? r.gpsTrack : straight);
+  const routed  = isFresh;
 
   return (
     <RouteLayer
