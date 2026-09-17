@@ -39,4 +39,9 @@ type TripRepository interface {
 	// Delete removes a trip from the workspace. Returns ErrNotFound if the trip
 	// does not exist in this workspace.
 	Delete(ctx context.Context, id, workspaceID uuid.UUID) error
+
+	// CancelActiveByTruck marks every non-terminal trip (not COMPLETED/CANCELLED)
+	// for the given truck as CANCELLED. Called right before creating a new trip
+	// for a truck so re-dispatching doesn't leave the previous trip stuck open.
+	CancelActiveByTruck(ctx context.Context, truckID, workspaceID uuid.UUID) error
 }

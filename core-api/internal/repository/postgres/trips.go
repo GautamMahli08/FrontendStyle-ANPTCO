@@ -144,6 +144,18 @@ func (r *tripRepo) Delete(ctx context.Context, id, workspaceID uuid.UUID) error 
 	return nil
 }
 
+func (r *tripRepo) CancelActiveByTruck(ctx context.Context, truckID, workspaceID uuid.UUID) error {
+	const q = `
+		UPDATE trips
+		SET    status = 'CANCELLED', updated_at = now()
+		WHERE  truck_id = $1 AND workspace_id = $2
+		  AND  status NOT IN ('COMPLETED', 'CANCELLED')`
+	if _, err := r.db.ExecContext(ctx, q, truckID, workspaceID); err != nil {
+		return fmt.Errorf("trips: cancel active by truck %s: %w", truckID, err)
+	}
+	return nil
+}
+
 // nullJSON returns nil when b is empty so the DB column stays NULL.
 func nullJSON(b domain.JSONB) interface{} {
 	if len(b) == 0 {

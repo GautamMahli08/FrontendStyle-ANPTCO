@@ -15,6 +15,7 @@ const (
 	TripStatusArrived          TripStatus = "ARRIVED"
 	TripStatusDeliveryAccepted TripStatus = "DELIVERY_ACCEPTED"
 	TripStatusCompleted        TripStatus = "COMPLETED"
+	TripStatusCancelled        TripStatus = "CANCELLED"
 )
 
 // TripSource records how a trip was created.
