@@ -229,10 +229,12 @@ function RouteLayer({
   );
 }
 
-// One component per route — each manages its own OSRM fetch independently.
-// This mirrors FleetMap's RoutePolyline pattern: parent re-renders don't abort
-// in-flight OSRM requests because each route's useEffect only depends on its
-// own coordinates, not the parent routes array.
+// Draws the actual recorded path — the real GPS breadcrumbs connected directly,
+// no road-snapping. This is ground truth: it can look slightly off-road/jagged,
+// but it can never show a road the vehicle didn't actually take, which an OSRM
+// best-guess reconstruction between sparse samples could. The forward-looking
+// "path ahead" segment (RemainingRouteLayer) is a prediction, so OSRM snapping
+// makes sense there; this is history, where accuracy matters more than smoothness.
 function TripRouteLayer({
   r,
   selected,
@@ -245,79 +247,13 @@ function TripRouteLayer({
   visibleTypes?: Set<string>;
 }) {
   const straight: [number, number][] = [[r.originLat, r.originLng], [r.destLat, r.destLng]];
-  const [roadPts, setRoadPts] = useState<[number, number][] | null>(null);
-  // Which waypoints string roadPts was fetched for — lets us tell a fresh,
-  // up-to-date route apart from a stale one still waiting on a re-fetch.
-  const [roadPtsFor, setRoadPtsFor] = useState<string | null>(null);
-
-  // Build waypoint string: GPS span check to avoid depot-cluster-only routes
-  const waypoints = (() => {
-    if (r.gpsTrack.length >= 2) {
-      const lats    = r.gpsTrack.map(([lat]) => lat);
-      const lngs    = r.gpsTrack.map(([, lng]) => lng);
-      const latSpan = Math.max(...lats) - Math.min(...lats);
-      const lngSpan = Math.max(...lngs) - Math.min(...lngs);
-      if (latSpan > 0.01 || lngSpan > 0.01) {
-        const step    = Math.max(1, Math.floor(r.gpsTrack.length / 12));
-        const indices = new Set<number>([0, r.gpsTrack.length - 1]);
-        for (let i = step; i < r.gpsTrack.length - 1; i += step) indices.add(i);
-
-        // Force every recorded stop's nearest track point into the route so the
-        // road-snapped line actually passes through where the truck stopped,
-        // not just wherever the sparse even-interval sampling happened to land.
-        for (const ev of r.events) {
-          if (ev.eventType !== 'MOVEMENT_STOP') continue;
-          let bestIdx = -1, bestDist = Infinity;
-          r.gpsTrack.forEach(([lat, lng], i) => {
-            const d = Math.abs(lat - ev.lat) + Math.abs(lng - ev.lng);
-            if (d < bestDist) { bestDist = d; bestIdx = i; }
-          });
-          if (bestIdx >= 0) indices.add(bestIdx);
-        }
-
-        const sample = Array.from(indices).sort((a, b) => a - b).map(i => r.gpsTrack[i]);
-        return sample.map(([lat, lng]) => `${lng},${lat}`).join(';');
-      }
-    }
-    return `${r.originLng},${r.originLat};${r.destLng},${r.destLat}`;
-  })();
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    const timer = setTimeout(async () => {
-      try {
-        const url =
-          `https://router.project-osrm.org/route/v1/driving/${waypoints}` +
-          `?overview=full&geometries=geojson`;
-        const res  = await fetch(url, { signal: ctrl.signal });
-        const data = await res.json();
-        const coords: number[][] | undefined = data.routes?.[0]?.geometry?.coordinates;
-        if (coords && coords.length > 0) {
-          setRoadPts(coords.map(([lng, lat]) => [lat, lng] as [number, number]));
-          setRoadPtsFor(waypoints);
-        }
-      } catch (e) {
-        if ((e as Error).name !== 'AbortError') console.warn('[TripHistoryMap] OSRM failed:', r.id, (e as Error).message);
-      }
-    }, 300);
-    return () => { clearTimeout(timer); ctrl.abort(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [waypoints]);
-
-  // New telemetry (polled every 15s) extends gpsTrack and changes waypoints —
-  // roadPts from the previous fetch is now stale for the new points. Fall back
-  // to the raw/dashed line (RouteLayer's routed=false styling) until the fresh
-  // OSRM fetch for the updated waypoints resolves, rather than showing an
-  // outdated "final" line that then jumps once the new one lands.
-  const isFresh = roadPts != null && roadPtsFor === waypoints;
-  const pts     = isFresh ? roadPts! : (r.gpsTrack.length >= 2 ? r.gpsTrack : straight);
-  const routed  = isFresh;
+  const pts = r.gpsTrack.length >= 2 ? r.gpsTrack : straight;
 
   return (
     <RouteLayer
       r={r}
       pts={pts}
-      routed={routed}
+      routed
       selected={selected}
       onSelect={onSelect}
       visibleTypes={visibleTypes}
