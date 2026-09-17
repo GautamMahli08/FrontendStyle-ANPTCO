@@ -32,6 +32,11 @@ export interface TripRoute {
   destLng:   number;
   events:    TripEvent[];
   gpsTrack:  [number, number][]; // actual GPS breadcrumbs from asset events, oldest→newest
+  // True for a trip still en route (not yet ARRIVED/COMPLETED/CANCELLED) — draws
+  // a second, lightly-styled segment from the truck's current position straight
+  // to the destination via a simple 2-point OSRM call, same approach FleetMap
+  // uses for its always-accurate "where it's headed" line.
+  showRemainingRoute?: boolean;
 }
 
 export interface GeofenceZone {
@@ -61,6 +66,50 @@ function FitSelected({ selected, allRoutes }: { selected: TripRoute | null; allR
     map.fitBounds(L.latLngBounds(pts), { padding: [56, 56] });
   }, [selected, allRoutes, map]);
   return null;
+}
+
+// Draws the remaining leg — current position straight to the destination via a
+// simple 2-point OSRM call. Deliberately doesn't try to reconstruct history
+// (that's gpsTrack's job): exactly the same approach FleetMap's RoutePolyline
+// uses, since a 2-point route is always accurate and never needs sparse-sample
+// guessing. Rendered lighter/dashed so it reads as "path ahead", not "driven".
+function RemainingRouteLayer({
+  fromLat, fromLng, toLat, toLng, color,
+}: {
+  fromLat: number; fromLng: number; toLat: number; toLng: number; color: string;
+}) {
+  const straight: [number, number][] = [[fromLat, fromLng], [toLat, toLng]];
+  const [route, setRoute] = useState<[number, number][] | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const url =
+          `https://router.project-osrm.org/route/v1/driving/` +
+          `${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson`;
+        const res  = await fetch(url, { signal: ctrl.signal });
+        const data = await res.json();
+        const coords: number[][] | undefined = data.routes?.[0]?.geometry?.coordinates;
+        if (coords && coords.length > 0) {
+          setRoute(coords.map(([lng, lat]) => [lat, lng] as [number, number]));
+        }
+      } catch (e) {
+        if ((e as Error).name !== 'AbortError') console.warn('[TripHistoryMap] remaining-route OSRM failed:', (e as Error).message);
+      }
+    }, 1000); // debounced — position polls every 15s, no need to hammer OSRM per render
+    return () => { clearTimeout(timer); ctrl.abort(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromLat, fromLng, toLat, toLng]);
+
+  const pts = route ?? straight;
+
+  return (
+    <Polyline
+      positions={pts}
+      pathOptions={{ color, weight: 4, opacity: 0.4, dashArray: '4 8', lineCap: 'round' }}
+    />
+  );
 }
 
 function RouteLayer({
@@ -361,6 +410,18 @@ export default function TripHistoryMap({
           visibleTypes={visibleTypes}
         />
       )}
+
+      {selected && selected.showRemainingRoute && selected.gpsTrack.length > 0 && (() => {
+        const [curLat, curLng] = selected.gpsTrack[selected.gpsTrack.length - 1];
+        return (
+          <RemainingRouteLayer
+            key={`remaining-${selected.id}`}
+            fromLat={curLat} fromLng={curLng}
+            toLat={selected.destLat} toLng={selected.destLng}
+            color={selected.color}
+          />
+        );
+      })()}
     </MapContainer>
   );
 }

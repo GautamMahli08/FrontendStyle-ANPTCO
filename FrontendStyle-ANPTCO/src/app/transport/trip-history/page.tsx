@@ -367,6 +367,7 @@ export default function TripHistoryPage() {
           destLat:   t.dest_lat,
           destLng:   t.dest_lng,
           gpsTrack:  track,
+          showRemainingRoute: !['ARRIVED', 'DELIVERY_ACCEPTED', 'COMPLETED', 'CANCELLED'].includes(t.status),
           events:    (() => {
               // MOVEMENT_STOP: group stops within ~100 m of each other into one badge marker.
               // Nothing is hidden — the badge count shows every stop, so repeated stops at
