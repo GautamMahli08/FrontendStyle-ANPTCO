@@ -192,6 +192,28 @@ export default function TripHistoryPage() {
 
   const truckById = new Map(trucks.map(t => [t.id, t]));
 
+  // Truck -> id of its most recently created non-terminal trip. A trip stuck
+  // in EN_ROUTE never gets its updated_at touched until a status transition
+  // fires (e.g. geofence-triggered ARRIVED), so using updated_at as the event
+  // window's end point freezes that window at dispatch time — any telemetry
+  // arriving after that (including everything recorded during an ingestion
+  // outage) falls outside it and never shows up as the trip's route. Only the
+  // single latest active trip per truck gets an open-ended ("now") window, so
+  // older stale active trips for the same truck don't also absorb live events.
+  const latestActiveTripIdByTruck = useMemo(() => {
+    const idByTruck = new Map<string, string>();
+    const createdByTruck = new Map<string, number>();
+    for (const t of trips) {
+      if (['COMPLETED', 'CANCELLED'].includes(t.status)) continue;
+      const created = new Date(t.created_at).getTime();
+      if (!createdByTruck.has(t.truck_id) || created > createdByTruck.get(t.truck_id)!) {
+        createdByTruck.set(t.truck_id, created);
+        idByTruck.set(t.truck_id, t.id);
+      }
+    }
+    return idByTruck;
+  }, [trips]);
+
   // Chronological order (oldest first) used to assign stable #1, #2, … numbers.
   const tripsChronological = useMemo(
     () => [...trips].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
@@ -275,8 +297,10 @@ export default function TripHistoryPage() {
   }
 
   function tripEvents(trip: ApiTrip): ApiAssetEvent[] {
-    const start = new Date(trip.created_at).getTime();
-    const end   = new Date(trip.updated_at).getTime();
+    const start        = new Date(trip.created_at).getTime();
+    const isLatestActive = !['COMPLETED', 'CANCELLED'].includes(trip.status)
+      && latestActiveTripIdByTruck.get(trip.truck_id) === trip.id;
+    const end = isLatestActive ? Date.now() : new Date(trip.updated_at).getTime();
     return events
       .filter(e =>
         e.truck_id === trip.truck_id &&
