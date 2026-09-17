@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import Sidebar from '@/src/components/layout/Sidebar';
 import Header  from '@/src/components/layout/Header';
 import { getCurrentUser } from '@/src/lib/user-store';
-import { api, type ApiTruck, type ApiAssetEvent, type ApiGeofence } from '@/src/lib/api';
+import { api, type ApiTruck, type ApiAssetEvent, type ApiGeofence, type ApiTrip } from '@/src/lib/api';
 import type { FleetMarker, TestWaypoint, DepotZone } from '@/src/components/FleetMap';
 import {
   type SavedDestination,
@@ -51,6 +51,7 @@ export default function TransportFleetMonitorPage() {
   const [trucks,       setTrucks]       = useState<ApiTruck[]>([]);
   const [alerts,       setAlerts]       = useState<ApiAssetEvent[]>([]);
   const [depots,       setDepots]       = useState<ApiGeofence[]>([]);
+  const [trips,        setTrips]        = useState<ApiTrip[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState<string | null>(null);
   const initialLoad    = useRef(true);
@@ -103,6 +104,13 @@ export default function TransportFleetMonitorPage() {
     try { setDepots((await api.depots.list()) ?? []); } catch {}
   }, []);
 
+  // All workspace trips — not just ones dispatched from this browser session.
+  // Without this, a trip dispatched by another user/device never shows its
+  // destination pin here, since dispatchMsgs/saved-destinations are local-only.
+  const loadTrips = useCallback(async () => {
+    try { setTrips((await api.trips.list()) ?? []); } catch {}
+  }, []);
+
   useEffect(() => {
     if (!user) { router.replace('/auth/login'); return; }
     setDestinations(loadDestinations());
@@ -110,10 +118,12 @@ export default function TransportFleetMonitorPage() {
     loadTrucks();
     loadAlerts();
     loadDepots();
+    loadTrips();
     const t1 = setInterval(() => loadTrucks(), 5_000);
     const t2 = setInterval(() => loadAlerts(), 30_000);
-    return () => { clearInterval(t1); clearInterval(t2); };
-  }, [loadTrucks, loadAlerts, loadDepots, router, user]);
+    const t3 = setInterval(() => loadTrips(), 15_000);
+    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
+  }, [loadTrucks, loadAlerts, loadDepots, loadTrips, router, user]);
 
   // Helpers for destination CRUD
   function addDestination() {
@@ -297,10 +307,24 @@ export default function TransportFleetMonitorPage() {
   if (!user) return null;
 
   const activeDest = getActiveDest(destinations, activeDestId);
-  // Convert active destination to a waypoint for the map
-  const waypoints: TestWaypoint[] = activeDest
+  // Waypoints shown on the map: this browser's own destination preview (localStorage,
+  // not yet dispatched) plus every in-progress trip in the workspace — including ones
+  // dispatched from another user's session/device, which only live in the backend.
+  const activeTripWaypoints: TestWaypoint[] = trips
+    .filter(t => !['COMPLETED', 'CANCELLED'].includes(t.status) && t.dest_lat != null && t.dest_lng != null)
+    .map(t => ({
+      id:         `trip-${t.id}`,
+      name:       t.dest_name ?? 'Destination',
+      lat:        t.dest_lat!,
+      lng:        t.dest_lng!,
+      radius:     300,
+      dispatched: true,
+    }));
+  const previewWaypoint: TestWaypoint[] = activeDest && !activeTripWaypoints.some(w =>
+      Math.abs(w.lat - activeDest.lat) < 0.001 && Math.abs(w.lng - activeDest.lng) < 0.001)
     ? [{ id: activeDest.id, name: activeDest.name, lat: activeDest.lat, lng: activeDest.lng, radius: activeDest.radius }]
     : [];
+  const waypoints: TestWaypoint[] = [...activeTripWaypoints, ...previewWaypoint];
 
   const markers: FleetMarker[] = trucks
     .filter(t => t.latitude != null && t.longitude != null)
