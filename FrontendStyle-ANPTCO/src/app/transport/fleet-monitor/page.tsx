@@ -308,10 +308,20 @@ export default function TransportFleetMonitorPage() {
 
   const activeDest = getActiveDest(destinations, activeDestId);
   // Waypoints shown on the map: this browser's own destination preview (localStorage,
-  // not yet dispatched) plus every in-progress trip in the workspace — including ones
-  // dispatched from another user's session/device, which only live in the backend.
-  const activeTripWaypoints: TestWaypoint[] = trips
-    .filter(t => !['COMPLETED', 'CANCELLED'].includes(t.status) && t.dest_lat != null && t.dest_lng != null)
+  // not yet dispatched) plus the CURRENT in-progress trip per truck in the workspace —
+  // including ones dispatched from another user's session/device, which only live in
+  // the backend. A truck can accumulate multiple stale EN_ROUTE trips if earlier test
+  // dispatches were never marked complete/cancelled, so only the most recently created
+  // active trip per truck is shown — otherwise old leftover pins bury the real one.
+  const latestActiveTripByTruck = new Map<string, ApiTrip>();
+  for (const t of trips) {
+    if (['COMPLETED', 'CANCELLED'].includes(t.status) || t.dest_lat == null || t.dest_lng == null) continue;
+    const existing = latestActiveTripByTruck.get(t.truck_id);
+    if (!existing || new Date(t.created_at) > new Date(existing.created_at)) {
+      latestActiveTripByTruck.set(t.truck_id, t);
+    }
+  }
+  const activeTripWaypoints: TestWaypoint[] = Array.from(latestActiveTripByTruck.values())
     .map(t => ({
       id:         `trip-${t.id}`,
       name:       t.dest_name ?? 'Destination',
