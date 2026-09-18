@@ -1156,6 +1156,11 @@ export default function TripHistoryPage() {
                         L.polyline(clean, { color: '#3b82f6', weight: 5, opacity: 1 }).addTo(_map);
                         var start = clean[0];
                         var end   = clean[clean.length - 1];
+                        // Fit to the actual drawn route, not just depot+destination — an
+                        // in-progress trip's real path can deviate well off that straight
+                        // line, and the old fixed bounds would crop it out of the printout.
+                        _bounds = clean.concat([[d.depotLat, d.depotLng], [d.destLat, d.destLng]]);
+                        fitMap();
                         function makePin(color, label) {
                           return L.divIcon({
                             html: '<div style="display:flex;flex-direction:column;align-items:center">'

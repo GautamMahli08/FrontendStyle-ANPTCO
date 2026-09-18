@@ -296,13 +296,17 @@ function TripRouteLayer({
   const straight: [number, number][] = [[r.originLat, r.originLng], [r.destLat, r.destLng]];
   const rawPts = r.gpsTrack.length >= 2 ? r.gpsTrack : straight;
 
-  // gpsTrack's tail (at least) is a truck_live_state estimate, not a recorded
-  // breadcrumb — snapping it to a road reads far better than a straight line
-  // cutting across the map. A genuinely recorded trail skips this entirely and
-  // draws rawPts directly, since that's ground truth and shouldn't be guessed at.
+  // A handful of sparse points (2-3) connected directly is never trustworthy as
+  // "ground truth" — real continuous recording would have far more points, so a
+  // short track means we simply don't have enough data, not that the vehicle
+  // actually drove in a straight line off-road. Snap those to a real road route,
+  // same as the known-estimated (truck_live_state) tail. Only a track with
+  // enough recorded points to plausibly represent an actual driven path is
+  // trusted and drawn raw/unsnapped.
+  const needsSnapping = r.gpsTrackIsEstimated || r.gpsTrack.length <= 3;
   const [snapped, setSnapped] = useState<[number, number][] | null>(null);
   useEffect(() => {
-    if (!r.gpsTrackIsEstimated) { setSnapped(null); return; }
+    if (!needsSnapping) { setSnapped(null); return; }
     const ctrl = new AbortController();
     const timer = setTimeout(async () => {
       try {
@@ -315,14 +319,14 @@ function TripRouteLayer({
           setSnapped(coords.map(([lng, lat]) => [lat, lng] as [number, number]));
         }
       } catch (e) {
-        if ((e as Error).name !== 'AbortError') console.warn('[TripHistoryMap] estimated-track OSRM failed:', r.id, (e as Error).message);
+        if ((e as Error).name !== 'AbortError') console.warn('[TripHistoryMap] sparse-track OSRM failed:', r.id, (e as Error).message);
       }
     }, 300);
     return () => { clearTimeout(timer); ctrl.abort(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [r.gpsTrackIsEstimated, JSON.stringify(rawPts)]);
+  }, [needsSnapping, JSON.stringify(rawPts)]);
 
-  const pts = r.gpsTrackIsEstimated ? (snapped ?? rawPts) : rawPts;
+  const pts = needsSnapping ? (snapped ?? rawPts) : rawPts;
 
   return (
     <RouteLayer
