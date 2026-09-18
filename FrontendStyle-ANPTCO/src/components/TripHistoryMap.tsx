@@ -357,8 +357,7 @@ export default function TripHistoryMap({
     ? [routes[0].originLat, routes[0].originLng]
     : DEFAULT_CENTER;
 
-  const unselected = routes.filter(r => r.id !== selectedId);
-  const selected   = routes.find(r => r.id === selectedId) ?? null;
+  const selected = routes.find(r => r.id === selectedId) ?? null;
 
   return (
     <MapContainer
@@ -415,16 +414,6 @@ export default function TripHistoryMap({
         );
       })}
 
-      {/* Only show other routes when nothing is selected — selecting a trip focuses the map on that trip only */}
-      {!selectedId && unselected.map(r => (
-        <TripRouteLayer
-          key={r.id}
-          r={r}
-          selected={false}
-          onSelect={() => onSelect(r.id)}
-          visibleTypes={visibleTypes}
-        />
-      ))}
 
       {selected && (
         <TripRouteLayer

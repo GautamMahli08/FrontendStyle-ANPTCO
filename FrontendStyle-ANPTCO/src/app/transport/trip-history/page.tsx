@@ -8,8 +8,6 @@ import Header  from '@/src/components/layout/Header';
 import { getCurrentUser } from '@/src/lib/user-store';
 import { api, type ApiTrip, type ApiAssetEvent, type ApiTruck, type ApiGeofence } from '@/src/lib/api';
 import type { TripRoute, TripEvent, GeofenceZone } from '@/src/components/TripHistoryMap';
-import { loadDestinations, loadActiveDestId, getActiveDest } from '@/src/lib/saved-destinations';
-
 const TripHistoryMap = dynamic(() => import('@/src/components/TripHistoryMap'), { ssr: false });
 
 const TRIP_COLORS = [
@@ -464,29 +462,20 @@ export default function TripHistoryPage() {
       zones.push({ id: depot.id, lat: depot.latitude, lng: depot.longitude,
         radius: depot.radius_meters, name: depot.name, type: 'depot' });
     }
-    // Active saved destination from fleet monitor (localStorage) — only in overview mode,
-    // never while a specific trip is selected, so old trips don't show today's active target.
-    if (!selectedId) {
-      const savedDest = getActiveDest(loadDestinations(), loadActiveDestId());
-      if (savedDest) {
-        zones.push({ id: `saved-${savedDest.id}`, lat: savedDest.lat, lng: savedDest.lng,
-          radius: savedDest.radius, name: savedDest.name, type: 'station' });
+    // Nothing trip-specific shows until a trip is actually selected — only the
+    // depot (a fixed landmark, not tied to any one trip) is always visible.
+    if (selectedId) {
+      const t = trips.find(x => x.id === selectedId);
+      if (t?.dest_lat && t?.dest_lng && t?.dest_name) {
+        const tooClose = zones.some(z => haversineKm(z.lat, z.lng, t.dest_lat, t.dest_lng) < 0.5);
+        if (!tooClose) {
+          zones.push({ id: `dest-${t.id}`, lat: t.dest_lat,
+            lng: t.dest_lng, radius: 300, name: t.dest_name, type: 'station' });
+        }
       }
     }
-    // When a trip is selected show only its destination; otherwise show all rendered trip destinations.
-    const routeIds   = new Set(routes.map(r => r.id));
-    const tripsToPin = selectedId
-      ? trips.filter(t => t.id === selectedId)
-      : trips.filter(t => routeIds.has(t.id));
-    for (const t of tripsToPin) {
-      if (!t.dest_lat || !t.dest_lng || !t.dest_name) continue;
-      const tooClose = zones.some(z => haversineKm(z.lat, z.lng, t.dest_lat, t.dest_lng) < 0.5);
-      if (tooClose) continue;
-      zones.push({ id: `dest-${t.id}`, lat: t.dest_lat,
-        lng: t.dest_lng, radius: 300, name: t.dest_name, type: 'station' });
-    }
     return zones;
-  }, [depot, trips, routes, selectedId]);
+  }, [depot, trips, selectedId]);
 
   const depotLat = depot?.latitude;
   const depotLng = depot?.longitude;
