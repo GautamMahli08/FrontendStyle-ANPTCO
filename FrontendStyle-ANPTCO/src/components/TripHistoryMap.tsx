@@ -4,6 +4,15 @@ import L from 'leaflet';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Polyline, Circle, CircleMarker, Marker, Tooltip, useMap } from 'react-leaflet';
 
+function haversineKm(a: [number, number], b: [number, number]): number {
+  const R = 6371;
+  const dLat = (b[0] - a[0]) * Math.PI / 180;
+  const dLng = (b[1] - a[1]) * Math.PI / 180;
+  const s = Math.sin(dLat / 2) ** 2 +
+    Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -296,14 +305,23 @@ function TripRouteLayer({
   const straight: [number, number][] = [[r.originLat, r.originLng], [r.destLat, r.destLng]];
   const rawPts = r.gpsTrack.length >= 2 ? r.gpsTrack : straight;
 
-  // A handful of sparse points (2-3) connected directly is never trustworthy as
-  // "ground truth" — real continuous recording would have far more points, so a
-  // short track means we simply don't have enough data, not that the vehicle
-  // actually drove in a straight line off-road. Snap those to a real road route,
-  // same as the known-estimated (truck_live_state) tail. Only a track with
-  // enough recorded points to plausibly represent an actual driven path is
-  // trusted and drawn raw/unsnapped.
-  const needsSnapping = r.gpsTrackIsEstimated || r.gpsTrack.length <= 3;
+  // asset_events only fires on state transitions, so a trip can rack up plenty
+  // of *points* while still having zero real tracking through most of the
+  // actual drive — e.g. a cluster of events at departure (ignition/movement)
+  // and another cluster at arrival (geofence enter/stop), with nothing for the
+  // highway stretch between them. Point COUNT alone doesn't catch that: check
+  // whether one single gap between consecutive points dominates the total
+  // distance, meaning most of the journey has no real data to draw through.
+  const needsSnapping = r.gpsTrackIsEstimated || (() => {
+    if (r.gpsTrack.length <= 3) return true;
+    let total = 0, maxGap = 0;
+    for (let i = 1; i < r.gpsTrack.length; i++) {
+      const d = haversineKm(r.gpsTrack[i - 1], r.gpsTrack[i]);
+      total += d;
+      if (d > maxGap) maxGap = d;
+    }
+    return total > 0 && maxGap / total > 0.6;
+  })();
   const [snapped, setSnapped] = useState<[number, number][] | null>(null);
   useEffect(() => {
     if (!needsSnapping) { setSnapped(null); return; }
