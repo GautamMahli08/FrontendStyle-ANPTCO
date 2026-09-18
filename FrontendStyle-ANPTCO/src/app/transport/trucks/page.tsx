@@ -192,9 +192,11 @@ export default function TransportTrucksPage() {
                       </div>
                     )}
 
-                    {/* Compartment fuel — vertical bars, 9100 L capacity each */}
+                    {/* Compartment fuel — vertical bars. Per-compartment capacity;
+                        C1 temporarily set to 10L for testing, change back to 9100 here when done. */}
                     {(() => {
-                      const CAP = 9100;
+                      const CAPS: Record<number, number> = { 1: 10, 2: 9100, 3: 9100, 4: 9100 };
+                      const totalCap = CAPS[1] + CAPS[2] + CAPS[3] + CAPS[4];
                       const totalLoaded = [1,2,3,4].reduce((s,i) => s + (truck.compartment_fuel?.[String(i)] ?? 0), 0);
                       const colors = ['bg-blue-500','bg-cyan-400','bg-teal-500','bg-sky-500'];
                       const rings  = ['ring-blue-300','ring-cyan-300','ring-teal-300','ring-sky-300'];
@@ -214,7 +216,7 @@ export default function TransportTrucksPage() {
                                   <div key={label} className="space-y-0.5">
                                     <label className="text-[9px] font-semibold text-slate-500 uppercase">{label}</label>
                                     <input
-                                      type="number" min="0" max={CAP} step="100" placeholder="0"
+                                      type="number" min="0" max={CAPS[i + 1]} step="100" placeholder="0"
                                       value={fuelEntry[truck.id].c[i]}
                                       onChange={e => {
                                         const next: [string,string,string,string] = [...fuelEntry[truck.id].c] as [string,string,string,string];
@@ -229,7 +231,7 @@ export default function TransportTrucksPage() {
                               <div className="flex items-center justify-between">
                                 <span className="text-[10px] text-slate-500">
                                   Total: <strong>{fuelEntry[truck.id].c.reduce((s,v) => s + (parseFloat(v)||0), 0).toLocaleString()} L</strong>
-                                  <span className="text-slate-400"> / {(CAP*4).toLocaleString()} L</span>
+                                  <span className="text-slate-400"> / {totalCap.toLocaleString()} L</span>
                                 </span>
                                 <div className="flex gap-1.5">
                                   <button onClick={() => setFuelEntry(m => { const n={...m}; delete n[truck.id]; return n; })} className="text-[10px] px-2 py-1 rounded border border-slate-200 text-slate-500 hover:bg-slate-50">Cancel</button>
@@ -246,7 +248,8 @@ export default function TransportTrucksPage() {
                               <div className="flex gap-2">
                                 {[1,2,3,4].map(i => {
                                   const liters = truck.compartment_fuel?.[String(i)] ?? 0;
-                                  const pct    = Math.min(100, (liters / CAP) * 100);
+                                  const cap    = CAPS[i];
+                                  const pct    = Math.min(100, (liters / cap) * 100);
                                   const isEmpty = liters === 0;
                                   return (
                                     <div key={i} className="flex-1 flex flex-col items-center gap-1">
@@ -263,7 +266,7 @@ export default function TransportTrucksPage() {
                                         </div>
                                       </div>
                                       <span className="text-[9px] font-semibold text-slate-700 font-mono">{liters.toLocaleString()} L</span>
-                                      <span className="text-[8px] text-slate-400">/ {CAP.toLocaleString()} L</span>
+                                      <span className="text-[8px] text-slate-400">/ {cap.toLocaleString()} L</span>
                                     </div>
                                   );
                                 })}
@@ -273,7 +276,7 @@ export default function TransportTrucksPage() {
                                 <span className="text-[10px] text-slate-500">Total loaded</span>
                                 <span className="text-[10px] font-bold text-slate-700">
                                   {totalLoaded.toLocaleString()} L
-                                  <span className="font-normal text-slate-400"> / {(CAP*4).toLocaleString()} L</span>
+                                  <span className="font-normal text-slate-400"> / {totalCap.toLocaleString()} L</span>
                                 </span>
                               </div>
                             </>

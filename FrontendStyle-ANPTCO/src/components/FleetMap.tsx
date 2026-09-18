@@ -188,7 +188,10 @@ function TruckMarker({ m }: { m: FleetMarker }) {
             {m.lat.toFixed(5)}, {m.lng.toFixed(5)}
           </div>
           {(() => {
-            const CAP    = 9100;
+            // Per-compartment capacity — C1 temporarily set to 10L for testing;
+            // change back to 9100 here when done.
+            const CAPS: Record<number, number> = { 1: 10, 2: 9100, 3: 9100, 4: 9100 };
+            const totalCap = CAPS[1] + CAPS[2] + CAPS[3] + CAPS[4];
             const colors = ['#3b82f6', '#06b6d4', '#14b8a6', '#0ea5e9'];
             const total  = [1,2,3,4].reduce((s,i) => s + (m.compartmentFuel?.[String(i)] ?? 0), 0);
             return (
@@ -197,7 +200,8 @@ function TruckMarker({ m }: { m: FleetMarker }) {
                 <div style={{ display: 'flex', gap: 6 }}>
                   {[1,2,3,4].map(i => {
                     const liters  = m.compartmentFuel?.[String(i)] ?? 0;
-                    const pct     = Math.min(100, (liters / CAP) * 100);
+                    const cap     = CAPS[i];
+                    const pct     = Math.min(100, (liters / cap) * 100);
                     const isEmpty = liters === 0;
                     return (
                       <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
@@ -211,14 +215,14 @@ function TruckMarker({ m }: { m: FleetMarker }) {
                           </div>
                         </div>
                         <span style={{ fontSize: 9, fontWeight: 600, color: '#374151', fontFamily: 'monospace' }}>{liters.toLocaleString()} L</span>
-                        <span style={{ fontSize: 8, color: '#94a3b8' }}>/{CAP.toLocaleString()}</span>
+                        <span style={{ fontSize: 8, color: '#94a3b8' }}>/{cap.toLocaleString()}</span>
                       </div>
                     );
                   })}
                 </div>
                 <div style={{ marginTop: 6, paddingTop: 4, borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
                   <span style={{ color: '#94a3b8' }}>Total</span>
-                  <span style={{ fontWeight: 700, color: '#374151' }}>{total.toLocaleString()} / {(CAP*4).toLocaleString()} L</span>
+                  <span style={{ fontWeight: 700, color: '#374151' }}>{total.toLocaleString()} / {totalCap.toLocaleString()} L</span>
                 </div>
               </div>
             );
