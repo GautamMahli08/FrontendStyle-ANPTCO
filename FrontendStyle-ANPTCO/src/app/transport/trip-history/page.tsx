@@ -373,14 +373,14 @@ export default function TripHistoryPage() {
       )
       .flatMap((t, i) => {
         let track = tripGpsTrack(t);
+        const isLatestActive = !['COMPLETED', 'CANCELLED'].includes(t.status)
+          && latestActiveTripIdByTruck.get(t.truck_id) === t.id;
         // A freshly dispatched or transition-free trip can have 0–1 asset_events
         // yet to fire, which would otherwise drop the whole route (planned
         // background + remaining-ahead segment included) until the truck stops
         // or crosses a geofence. Fall back to origin -> live position so an
         // active trip still renders as soon as the truck has actually moved.
         if (track.length < 2) {
-          const isLatestActive = !['COMPLETED', 'CANCELLED'].includes(t.status)
-            && latestActiveTripIdByTruck.get(t.truck_id) === t.id;
           const liveTruck = truckById.get(t.truck_id);
           const oLat = depotLat ?? t.origin_lat;
           const oLng = depotLng ?? t.origin_lng;
@@ -398,6 +398,10 @@ export default function TripHistoryPage() {
           destLat:   t.dest_lat,
           destLng:   t.dest_lng,
           gpsTrack:  track,
+          // The tail of the track (at least) came from truck_live_state, not a
+          // real recorded breadcrumb, whenever this trip is its truck's current
+          // one — draw it road-snapped rather than as a raw straight line.
+          gpsTrackIsEstimated: isLatestActive,
           showRemainingRoute: !['ARRIVED', 'DELIVERY_ACCEPTED', 'COMPLETED', 'CANCELLED'].includes(t.status),
           events:    (() => {
               // MOVEMENT_STOP: group stops within ~100 m of each other into one badge marker.
