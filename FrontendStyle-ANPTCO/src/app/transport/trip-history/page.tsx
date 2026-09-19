@@ -1099,7 +1099,7 @@ export default function TripHistoryPage() {
                     <tbody>
                       <tr class="ms"><td>${fmtTime12(departureTime)}</td><td>🏭 Left Depot</td><td>${selectedTrip!.origin_name ?? ''}</td><td>—</td></tr>
                       ${rows}
-                      <tr class="ms"><td>${arrivalTime ? fmtTime12(arrivalTime) : '—'}</td><td>📍 ${hasArrived ? 'Arrived' : 'En Route…'}</td><td>${selectedTrip!.dest_name ?? ''}</td><td style="color:#1d4ed8;font-weight:700">${pdfLiveFuel != null ? pdfLiveFuel.toFixed(1) + ' L' : '—'}</td></tr>
+                      <tr class="ms"><td>${arrivalTime ? fmtTime12(arrivalTime) : '—'}</td><td>📍 ${hasArrived ? 'Arrived' : selectedTrip!.status === 'CANCELLED' ? 'Cancelled' : 'En Route…'}</td><td>${selectedTrip!.dest_name ?? ''}</td><td style="color:#1d4ed8;font-weight:700">${pdfLiveFuel != null ? pdfLiveFuel.toFixed(1) + ' L' : '—'}</td></tr>
                     </tbody>
                   </table>
                   ${lastGpsEv ? `<div class="pos-section">
@@ -1335,12 +1335,15 @@ export default function TripHistoryPage() {
                         <span className="text-sm leading-none">📍</span>
                       </div>
                       <div className="min-w-0">
-                        <p className={`text-[11px] font-bold leading-tight ${hasArrived ? 'text-blue-700' : 'text-slate-400'}`}>
-                          {hasArrived ? 'Arrived' : 'En Route…'}
+                        <p className={`text-[11px] font-bold leading-tight ${
+                          hasArrived ? 'text-blue-700' : selectedTrip.status === 'CANCELLED' ? 'text-red-500' : 'text-slate-400'
+                        }`}>
+                          {hasArrived ? 'Arrived' : selectedTrip.status === 'CANCELLED' ? 'Cancelled' : 'En Route…'}
                         </p>
                         {arrivalTime && <p className="text-[10px] text-slate-400 font-mono">{fmtTime12(arrivalTime)}</p>}
                         <p className="text-[10px] text-slate-500 truncate">{selectedTrip.dest_name}</p>
-                        {!hasArrived && <p className="text-[10px] text-slate-400 italic">Not yet arrived</p>}
+                        {!hasArrived && selectedTrip.status !== 'CANCELLED' && <p className="text-[10px] text-slate-400 italic">Not yet arrived</p>}
+                        {selectedTrip.status === 'CANCELLED' && <p className="text-[10px] text-red-400 italic">Superseded by a later dispatch</p>}
                       </div>
                     </div>
 
