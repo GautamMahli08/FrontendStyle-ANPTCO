@@ -285,12 +285,12 @@ function RouteLayer({
   );
 }
 
-// Draws the actual recorded path — the real GPS breadcrumbs connected directly,
-// no road-snapping. This is ground truth: it can look slightly off-road/jagged,
-// but it can never show a road the vehicle didn't actually take, which an OSRM
-// best-guess reconstruction between sparse samples could. The forward-looking
-// "path ahead" segment (RemainingRouteLayer) is a prediction, so OSRM snapping
-// makes sense there; this is history, where accuracy matters more than smoothness.
+// Draws the driven-so-far path, always road-snapped. A raw straight line
+// between recorded points can cut straight through buildings/terrain no
+// vehicle could physically cross — even as a "best guess" it's worse than
+// a real, driveable road, since a road-snapped line is at minimum a path
+// that actually exists. Shows the raw points immediately (dashed) while the
+// snap request is in flight, then replaces it with the snapped result.
 function TripRouteLayer({
   r,
   selected,
@@ -305,52 +305,58 @@ function TripRouteLayer({
   const straight: [number, number][] = [[r.originLat, r.originLng], [r.destLat, r.destLng]];
   const rawPts = r.gpsTrack.length >= 2 ? r.gpsTrack : straight;
 
-  // asset_events only fires on state transitions, so a trip can rack up plenty
-  // of *points* while still having zero real tracking through most of the
-  // actual drive — e.g. a cluster of events at departure (ignition/movement)
-  // and another cluster at arrival (geofence enter/stop), with nothing for the
-  // highway stretch between them. Point COUNT alone doesn't catch that: check
-  // whether one single gap between consecutive points dominates the total
-  // distance, meaning most of the journey has no real data to draw through.
-  const needsSnapping = r.gpsTrackIsEstimated || (() => {
-    if (r.gpsTrack.length <= 3) return true;
-    let total = 0, maxGap = 0;
-    for (let i = 1; i < r.gpsTrack.length; i++) {
-      const d = haversineKm(r.gpsTrack[i - 1], r.gpsTrack[i]);
-      total += d;
-      if (d > maxGap) maxGap = d;
+  // OSRM has practical limits on waypoint count — sample down to ~12 evenly
+  // spaced points for long tracks, always forcing in the first/last point and
+  // every recorded stop's nearest point so the snapped route still passes
+  // through them precisely rather than just wherever even-sampling landed.
+  const waypoints = (() => {
+    if (rawPts.length <= 12) return rawPts;
+    const step    = Math.max(1, Math.floor(rawPts.length / 12));
+    const indices = new Set<number>([0, rawPts.length - 1]);
+    for (let i = step; i < rawPts.length - 1; i += step) indices.add(i);
+    for (const ev of r.events) {
+      if (ev.eventType !== 'MOVEMENT_STOP') continue;
+      let bestIdx = -1, bestDist = Infinity;
+      rawPts.forEach(([lat, lng], i) => {
+        const d = Math.abs(lat - ev.lat) + Math.abs(lng - ev.lng);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      });
+      if (bestIdx >= 0) indices.add(bestIdx);
     }
-    return total > 0 && maxGap / total > 0.6;
+    return Array.from(indices).sort((a, b) => a - b).map(i => rawPts[i]);
   })();
+
   const [snapped, setSnapped] = useState<[number, number][] | null>(null);
+  const [snappedFor, setSnappedFor] = useState<string | null>(null);
   useEffect(() => {
-    if (!needsSnapping) { setSnapped(null); return; }
     const ctrl = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const wp = rawPts.map(([lat, lng]) => `${lng},${lat}`).join(';');
+        const wp = waypoints.map(([lat, lng]) => `${lng},${lat}`).join(';');
         const url = `https://router.project-osrm.org/route/v1/driving/${wp}?overview=full&geometries=geojson`;
         const res  = await fetch(url, { signal: ctrl.signal });
         const data = await res.json();
         const coords: number[][] | undefined = data.routes?.[0]?.geometry?.coordinates;
         if (coords && coords.length > 0) {
           setSnapped(coords.map(([lng, lat]) => [lat, lng] as [number, number]));
+          setSnappedFor(JSON.stringify(waypoints));
         }
       } catch (e) {
-        if ((e as Error).name !== 'AbortError') console.warn('[TripHistoryMap] sparse-track OSRM failed:', r.id, (e as Error).message);
+        if ((e as Error).name !== 'AbortError') console.warn('[TripHistoryMap] road-snap OSRM failed:', r.id, (e as Error).message);
       }
     }, 300);
     return () => { clearTimeout(timer); ctrl.abort(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsSnapping, JSON.stringify(rawPts)]);
+  }, [JSON.stringify(waypoints)]);
 
-  const pts = needsSnapping ? (snapped ?? rawPts) : rawPts;
+  const isFresh = snapped != null && snappedFor === JSON.stringify(waypoints);
+  const pts     = isFresh ? snapped! : rawPts;
 
   return (
     <RouteLayer
       r={r}
       pts={pts}
-      routed
+      routed={isFresh}
       selected={selected}
       onSelect={onSelect}
       visibleTypes={visibleTypes}
