@@ -77,6 +77,10 @@ func (m *mockTripRepo) GetActiveTripID(ctx context.Context, truckID uuid.UUID) (
 	return nil, nil
 }
 
+func (m *mockTripRepo) CompleteDirectly(ctx context.Context, tripID uuid.UUID) (bool, error) {
+	return false, nil
+}
+
 // ---- fixtures ----------------------------------------------------------------
 
 var (

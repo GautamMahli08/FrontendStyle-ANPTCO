@@ -118,3 +118,16 @@ func (r *tripRepository) GetActiveTripID(ctx context.Context, truckID uuid.UUID)
 	}
 	return &id, nil
 }
+
+func (r *tripRepository) CompleteDirectly(ctx context.Context, tripID uuid.UUID) (bool, error) {
+	q := fromCtx(ctx, r.db)
+	const query = `
+		UPDATE trips SET status = 'COMPLETED', updated_at = now()
+		WHERE  id = $1 AND status IN ('EN_ROUTE', 'ARRIVED') AND order_id IS NULL`
+	result, err := q.ExecContext(ctx, query, tripID)
+	if err != nil {
+		return false, fmt.Errorf("trip: complete directly %s: %w", tripID, err)
+	}
+	n, _ := result.RowsAffected()
+	return n > 0, nil
+}

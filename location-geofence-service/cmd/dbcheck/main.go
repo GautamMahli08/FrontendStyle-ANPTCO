@@ -64,6 +64,28 @@ func main() {
         fmt.Println("(no rows in truck_live_state at all)")
     }
 
+    fmt.Println("\n--- monitoring_config overrides (empty = every workspace uses code defaults) ---")
+    mcRows, err := db.QueryContext(context.Background(),
+        `SELECT workspace_id, vehicle_id, min_stop_duration_s, suspicious_stop_duration_s FROM monitoring_config`)
+    if err != nil { log.Fatal(err) }
+    mcFound := false
+    for mcRows.Next() {
+        mcFound = true
+        var wsID string
+        var vehicleID sql.NullString
+        var minStop, suspStop int
+        if err := mcRows.Scan(&wsID, &vehicleID, &minStop, &suspStop); err != nil {
+            fmt.Println("scan error:", err)
+            continue
+        }
+        fmt.Printf("workspace %s | vehicle %v | min_stop_duration_s=%d | suspicious_stop_duration_s=%d\n",
+            wsID[:8], vehicleID.String, minStop, suspStop)
+    }
+    mcRows.Close()
+    if !mcFound {
+        fmt.Println("(no overrides — code defaults apply)")
+    }
+
     fmt.Println("\n--- all trips with GPS-carrying event count, via trip_id (matches what the frontend now shows) ---")
     allRows, err := db.QueryContext(context.Background(), `
         SELECT t.id, t.dest_name, t.status,

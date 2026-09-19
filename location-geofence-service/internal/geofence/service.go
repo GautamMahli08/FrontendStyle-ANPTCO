@@ -235,6 +235,34 @@ func (s *Service) applyStateMachineEffect(
 		if trip == nil || trip.TripStatus != domain.OrderStatusEnRoute {
 			return nil, nil
 		}
+
+		// Mode B (dispatch-only, order_id nil) trips complete the moment they
+		// reach the destination — there's no delivery-confirmation step to wait
+		// for. Mode A keeps the full ARRIVED -> DELIVERY_ACCEPTED -> COMPLETED
+		// flow, since that tracks real fuel delivery confirmation via QR scan.
+		if trip.OrderID == nil {
+			completed, err := s.trips.CompleteDirectly(ctx, trip.TripID)
+			if err != nil {
+				return nil, fmt.Errorf("complete trip on arrival: %w", err)
+			}
+			s.log.Info("trip → COMPLETED (arrived at destination)",
+				zap.String("trip_id", trip.TripID.String()),
+				zap.String("truck_id", truck.ID.String()),
+				zap.Bool("completed", completed),
+			)
+			if !completed {
+				return nil, nil
+			}
+			return &pendingNotification{
+				completed: &notify.OrderCompletedPayload{
+					TripID:      trip.TripID,
+					OrderID:     trip.OrderID,
+					WorkspaceID: truck.WorkspaceID,
+					OccurredAt:  ts,
+				},
+			}, nil
+		}
+
 		if err := s.trips.AdvanceToArrived(ctx, trip.TripID); err != nil {
 			return nil, fmt.Errorf("advance trip to ARRIVED: %w", err)
 		}

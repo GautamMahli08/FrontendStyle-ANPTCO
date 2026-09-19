@@ -101,6 +101,10 @@ func (m *mockTripRepo) GetActiveTripID(ctx context.Context, truckID uuid.UUID) (
 	return nil, nil
 }
 
+func (m *mockTripRepo) CompleteDirectly(ctx context.Context, tripID uuid.UUID) (bool, error) {
+	return false, nil
+}
+
 // passthroughTransactor calls fn(ctx) directly — no real DB transaction.
 type passthroughTransactor struct {
 	err error // inject a post-fn commit error for rollback tests

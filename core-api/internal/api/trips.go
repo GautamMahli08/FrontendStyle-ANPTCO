@@ -149,14 +149,6 @@ func (h *Handler) handleDispatchTrip(
 		}
 	}
 
-	// Re-dispatching a truck means its previous trip was never finished (or the
-	// driver skipped delivery confirmation) — close it out instead of leaving
-	// it stuck open forever alongside the new one.
-	if err := h.trips.CancelActiveByTruck(ctx, input.TruckID, workspaceID); err != nil {
-		h.log.Error("dispatch: cancel previous active trips", zap.Error(err))
-		return jsonError(500, "internal error"), nil
-	}
-
 	trip := &domain.Trip{
 		ID:             uuid.New(),
 		WorkspaceID:    workspaceID,
@@ -226,13 +218,6 @@ func (h *Handler) handleCreateTrip(
 	}
 	if err := h.geofences.Create(ctx, newFence); err != nil {
 		h.log.Error("create trip: create geofence", zap.Error(err))
-		return jsonError(500, "internal error"), nil
-	}
-
-	// Re-dispatching a truck means its previous trip was never finished — close
-	// it out instead of leaving it stuck open forever alongside the new one.
-	if err := h.trips.CancelActiveByTruck(ctx, input.TruckID, workspaceID); err != nil {
-		h.log.Error("create trip: cancel previous active trips", zap.Error(err))
 		return jsonError(500, "internal error"), nil
 	}
 

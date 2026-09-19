@@ -32,4 +32,10 @@ type TripRepository interface {
 	// (status not COMPLETED/CANCELLED, most recently created), or nil if none.
 	// Used to tag newly detected asset_events with an unambiguous trip_id.
 	GetActiveTripID(ctx context.Context, truckID uuid.UUID) (*uuid.UUID, error)
+
+	// CompleteDirectly transitions trip.status straight to COMPLETED when
+	// currently EN_ROUTE or ARRIVED, for Mode B (dispatch-only, order_id NULL)
+	// trips only — they have no delivery-confirmation step to wait for.
+	// Returns true when the transition occurred.
+	CompleteDirectly(ctx context.Context, tripID uuid.UUID) (bool, error)
 }
