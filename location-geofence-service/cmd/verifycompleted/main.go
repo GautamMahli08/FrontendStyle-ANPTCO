@@ -1,17 +1,8 @@
-// Verification/correction tool for the trips fixcompletedstatus touched.
-//
-// fixcompletedstatus's fallback check only verified "some station geofence
-// was entered sometime within this trip's [created_at, updated_at] window" —
-// too loose, since a cancelled trip's updated_at is stale (set whenever an
-// unrelated later dispatch cancelled it, not when the trip's own activity
-// ended). That could match a trip to a station entry that belongs to a
-// DIFFERENT destination entirely, as long as it happened before the trip
-// got cancelled weeks later.
-//
-// This re-checks properly: for each currently-COMPLETED trip, is there a
-// real geofence_events (ENTER, STATION) row within ~1km of THIS TRIP'S OWN
-// dest_lat/dest_lng, at or after its own created_at? Trips that fail this
-// stricter, coordinate-based check are reverted back to CANCELLED.
+// Strict re-verification: a COMPLETED trip is only trusted if there's a real
+// geofence_events row whose trip_id matches THIS trip's own id exactly.
+// Proximity alone is not enough — when two trips share a near-identical
+// destination (common in repeated test dispatches), a proximity-only check
+// can credit trip A with an arrival event that actually belongs to trip B.
 package main
 
 import (
@@ -26,72 +17,36 @@ func main() {
     if err != nil { log.Fatal(err) }
     defer db.Close()
 
-    // Haversine distance in km between the geofence event and the trip's own
-    // destination coordinates.
-    const distExpr = `
-        6371 * acos(
-          LEAST(1, GREATEST(-1,
-            cos(radians(t.dest_lat)) * cos(radians(ge.latitude)) *
-            cos(radians(ge.longitude) - radians(t.dest_lng)) +
-            sin(radians(t.dest_lat)) * sin(radians(ge.latitude))
-          ))
-        )`
-
-    fmt.Println("--- COMPLETED trips checked against their OWN destination coordinates ---")
+    fmt.Println("--- COMPLETED trips: strict trip_id-matched evidence only ---")
     rows, err := db.QueryContext(context.Background(), `
-        SELECT t.id, t.dest_name, t.dest_lat, t.dest_lng,
-               MIN(`+distExpr+`) AS min_dist_km
+        SELECT t.id, t.dest_name,
+               EXISTS (
+                 SELECT 1 FROM geofence_events ge
+                 WHERE ge.trip_id = t.id AND ge.event_type='ENTER' AND ge.geofence_type='STATION'
+               ) AS has_own_arrival
         FROM   trips t
-        LEFT   JOIN geofence_events ge
-               ON ge.truck_id = t.truck_id
-              AND ge.event_type = 'ENTER'
-              AND ge.geofence_type = 'STATION'
-              AND ge.occurred_at >= t.created_at
         WHERE  t.status = 'COMPLETED'
-        GROUP  BY t.id, t.dest_name, t.dest_lat, t.dest_lng
         ORDER  BY t.created_at`)
     if err != nil { log.Fatal(err) }
-    type result struct{ id, destName string; dist *float64 }
-    var results []result
+    var toRevert []string
     for rows.Next() {
         var id, destName string
-        var destLat, destLng float64
-        var dist *float64
-        if err := rows.Scan(&id, &destName, &destLat, &destLng, &dist); err != nil { log.Fatal("scan: ", err) }
-        results = append(results, result{id, destName, dist})
-        distStr := "no station-entry event at all"
-        if dist != nil {
-            distStr = fmt.Sprintf("%.3f km from its own destination", *dist)
-        }
-        fmt.Printf("trip %s | %-14s | %s\n", id[:8], destName, distStr)
+        var hasOwn bool
+        if err := rows.Scan(&id, &destName, &hasOwn); err != nil { log.Fatal("scan: ", err) }
+        fmt.Printf("trip %s | %-22s | has_own_arrival_event=%v\n", id[:8], destName, hasOwn)
+        if !hasOwn { toRevert = append(toRevert, id) }
     }
     rows.Close()
 
-    var toRevert []string
-    const thresholdKm = 1.0
-    for _, r := range results {
-        if r.dist == nil || *r.dist > thresholdKm {
-            toRevert = append(toRevert, r.id)
-        }
-    }
-
-    fmt.Printf("\n%d of %d COMPLETED trips verified within %.1fkm of their own destination.\n",
-        len(results)-len(toRevert), len(results), thresholdKm)
-
     if len(toRevert) == 0 {
-        fmt.Println("Nothing to revert.")
+        fmt.Println("\nAll COMPLETED trips have their own genuine arrival event. Nothing to revert.")
         return
     }
-
-    fmt.Printf("Reverting %d trip(s) back to CANCELLED (no evidence they reached THEIR OWN destination):\n", len(toRevert))
-    for _, id := range toRevert {
-        fmt.Println(" -", id)
-    }
+    fmt.Printf("\nReverting %d trip(s) with no genuinely-own arrival event:\n", len(toRevert))
+    for _, id := range toRevert { fmt.Println(" -", id) }
     res, err := db.ExecContext(context.Background(), `
-        UPDATE trips
-        SET    status = 'CANCELLED'
-        WHERE  status = 'COMPLETED'
-          AND  id = ANY($1)`, pq.Array(toRevert))
+        UPDATE trips SET status = 'CANCELLED' WHERE status = 'COMPLETED' AND id = ANY($1)`,
+        pq.Array(toRevert))
     if err != nil { log.Fatal("revert: ", err) }
     n, _ := res.RowsAffected()
     fmt.Printf("reverted %d trip(s).\n", n)
