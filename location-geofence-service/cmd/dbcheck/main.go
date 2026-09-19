@@ -64,14 +64,13 @@ func main() {
         fmt.Println("(no rows in truck_live_state at all)")
     }
 
-    fmt.Println("\n--- all trips with GPS-carrying event count (helps explain straight-line routes) ---")
+    fmt.Println("\n--- all trips with GPS-carrying event count, via trip_id (matches what the frontend now shows) ---")
     allRows, err := db.QueryContext(context.Background(), `
         SELECT t.id, t.dest_name, t.status,
                COUNT(e.id) FILTER (WHERE e.latitude IS NOT NULL AND e.longitude IS NOT NULL) AS gps_events,
                MIN(e.occurred_at) AS first_event, MAX(e.occurred_at) AS last_event
         FROM trips t
-        LEFT JOIN asset_events e ON e.truck_id = t.truck_id
-            AND e.occurred_at >= t.created_at AND e.occurred_at <= t.updated_at
+        LEFT JOIN asset_events e ON e.trip_id = t.id
         GROUP BY t.id, t.dest_name, t.status, t.created_at
         ORDER BY t.created_at`)
     if err != nil { log.Fatal(err) }
