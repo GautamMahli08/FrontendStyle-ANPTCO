@@ -298,21 +298,28 @@ export default function TripHistoryPage() {
   }
 
   function stopCount(trip: ApiTrip) {
-    const start = new Date(trip.created_at).getTime();
-    const end   = new Date(trip.updated_at).getTime();
-    return events.filter(e =>
-      e.truck_id === trip.truck_id &&
-      e.event_type === 'MOVEMENT_STOP' &&
-      new Date(e.occurred_at).getTime() >= start &&
-      new Date(e.occurred_at).getTime() <= end
-    ).length;
+    return tripEvents(trip).filter(e => e.event_type === 'MOVEMENT_STOP').length;
+  }
+
+  // A trip's updated_at only reliably reflects "when its own real activity
+  // ended" while it's still active or reached a natural end state on its own.
+  // Once something else (e.g. a later, unrelated dispatch) cancels it,
+  // updated_at jumps to that unrelated moment — which can be arbitrarily far
+  // from the trip's actual last activity. Prefer the trip's own last real
+  // event (via trip_id) when one exists, so duration/timeline stay honest.
+  function tripEffectiveEnd(trip: ApiTrip): string {
+    const own = events.filter(e => e.trip_id === trip.id);
+    if (own.length > 0) {
+      return own.reduce((a, b) => new Date(a.occurred_at).getTime() > new Date(b.occurred_at).getTime() ? a : b).occurred_at;
+    }
+    return trip.updated_at;
   }
 
   function tripEvents(trip: ApiTrip): ApiAssetEvent[] {
     const start        = new Date(trip.created_at).getTime();
     const isLatestActive = !['COMPLETED', 'CANCELLED'].includes(trip.status)
       && latestActiveTripIdByTruck.get(trip.truck_id) === trip.id;
-    const end = isLatestActive ? Date.now() : new Date(trip.updated_at).getTime();
+    const end = isLatestActive ? Date.now() : new Date(tripEffectiveEnd(trip)).getTime();
     return events
       .filter(e => {
         if (e.truck_id !== trip.truck_id) return false;
@@ -523,8 +530,8 @@ export default function TripHistoryPage() {
         return row([
           fmtDate(t.created_at),
           fmtTime12(t.created_at),
-          fmtTime12(t.updated_at),
-          tripDuration(t.created_at, t.updated_at),
+          fmtTime12(tripEffectiveEnd(t)),
+          tripDuration(t.created_at, tripEffectiveEnd(t)),
           t.dest_name,
           truck?.device_id ?? t.truck_id,
           STATUS_LABEL[t.status] ?? t.status,
@@ -750,7 +757,7 @@ export default function TripHistoryPage() {
                 const km        = kmFor(t);
                 const stops     = stopCount(t);
                 const evCount   = tripEvents(t).length;
-                const dur       = tripDuration(t.created_at, t.updated_at);
+                const dur       = tripDuration(t.created_at, tripEffectiveEnd(t));
                 const selected  = t.id === selectedId;
                 const truck     = truckById.get(t.truck_id);
 
@@ -795,7 +802,7 @@ export default function TripHistoryPage() {
                       <div className="flex items-center gap-1.5 text-[11px] text-slate-600 mb-2">
                         <span className="font-mono">{fmtTime12(t.created_at)}</span>
                         <span className="text-slate-300">→</span>
-                        <span className="font-mono">{fmtTime12(t.updated_at)}</span>
+                        <span className="font-mono">{fmtTime12(tripEffectiveEnd(t))}</span>
                         {dur && (
                           <>
                             <span className="text-slate-300">·</span>
@@ -889,13 +896,13 @@ export default function TripHistoryPage() {
             {selectedTrip && (() => {
               const evs = tripEvents(selectedTrip);
               const km  = kmFor(selectedTrip);
-              const dur = tripDuration(selectedTrip.created_at, selectedTrip.updated_at);
+              const dur = tripDuration(selectedTrip.created_at, tripEffectiveEnd(selectedTrip));
               const displayEvs    = evs.filter(e => e.event_type !== 'MOVEMENT_START');
               const departureEv   = evs.find(e => e.event_type === 'GEOFENCE_EXIT_DEPOT');
               const arrivalEv     = evs.find(e => e.event_type === 'GEOFENCE_ENTER_STATION');
               const departureTime = departureEv?.occurred_at ?? selectedTrip.created_at;
               const hasArrived    = ['ARRIVED','DELIVERY_ACCEPTED','COMPLETED'].includes(selectedTrip.status);
-              const arrivalTime   = arrivalEv?.occurred_at ?? (hasArrived ? selectedTrip.updated_at : null);
+              const arrivalTime   = arrivalEv?.occurred_at ?? (hasArrived ? tripEffectiveEnd(selectedTrip) : null);
               const tripNum       = tripNumber(selectedTrip.id);
 
               async function printTripPDF() {
@@ -1073,7 +1080,7 @@ export default function TripHistoryPage() {
                   </style>
                 </head><body>
                   <h1>Trip #${tripNum} — ${selectedTrip!.dest_name ?? 'Unknown'}<span class="badge">${STATUS_LABEL[selectedTrip!.status] ?? selectedTrip!.status}</span></h1>
-                  <div class="meta">${fmtDate(selectedTrip!.created_at)} &nbsp;·&nbsp; ${fmtTime12(selectedTrip!.created_at)} → ${fmtTime12(selectedTrip!.updated_at)}${dur ? ` &nbsp;·&nbsp; ${dur}` : ''}${km != null ? ` &nbsp;·&nbsp; ${km.toFixed(1)} km` : ''} &nbsp;·&nbsp; ${displayEvs.length} events</div>
+                  <div class="meta">${fmtDate(selectedTrip!.created_at)} &nbsp;·&nbsp; ${fmtTime12(selectedTrip!.created_at)} → ${fmtTime12(tripEffectiveEnd(selectedTrip!))}${dur ? ` &nbsp;·&nbsp; ${dur}` : ''}${km != null ? ` &nbsp;·&nbsp; ${km.toFixed(1)} km` : ''} &nbsp;·&nbsp; ${displayEvs.length} events</div>
                   <hr class="divider">
                   ${hasFuelData ? `<div class="fuel-row">
                     ${startFuel != null ? `<div class="fuel-box"><div class="fuel-box-label">Starting Fuel</div><div class="fuel-box-val">${startFuel.toFixed(1)} L</div></div>` : ''}
@@ -1222,7 +1229,7 @@ export default function TripHistoryPage() {
                       {fmtDate(selectedTrip.created_at)}
                     </p>
                     <p className="text-[10px] text-slate-400 font-mono pl-4 mt-0.5">
-                      {fmtTime12(selectedTrip.created_at)} → {fmtTime12(selectedTrip.updated_at)}
+                      {fmtTime12(selectedTrip.created_at)} → {fmtTime12(tripEffectiveEnd(selectedTrip))}
                       {dur ? ` · ${dur}` : ''}
                       {km != null ? ` · ${km.toFixed(1)} km` : ''}
                     </p>
