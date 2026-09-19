@@ -83,7 +83,7 @@ func main() {
 
 	// ── Domain services ──────────────────────────────────────────────────────
 	deviceCache := location.NewDeviceCache()
-	locationSvc := location.NewService(truckRepo, telemetryRepo, liveStateRepo, assetEventRepo, deviceCache, zlog)
+	locationSvc := location.NewService(truckRepo, telemetryRepo, liveStateRepo, assetEventRepo, tripRepo, deviceCache, zlog)
 	geofenceSvc := geofence.NewService(
 		geofenceRepo, eventRepo, tripRepo, tx, zlog,
 		cfg.GeofenceDestRadiusM, cfg.GeofenceDepotRadiusM,

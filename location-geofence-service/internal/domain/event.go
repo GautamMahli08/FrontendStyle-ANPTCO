@@ -30,6 +30,9 @@ type AssetEvent struct {
 	ID          uuid.UUID      `db:"id"           json:"id"`
 	TruckID     uuid.UUID      `db:"truck_id"     json:"truck_id"`
 	WorkspaceID uuid.UUID      `db:"workspace_id" json:"workspace_id"`
+	// TripID is nil for events detected while the truck had no active trip,
+	// and for rows recorded before this column existed.
+	TripID      *uuid.UUID     `db:"trip_id"      json:"trip_id,omitempty"`
 	EventType   AssetEventType `db:"event_type"   json:"event_type"`
 	Latitude    *float64       `db:"latitude"     json:"latitude,omitempty"`
 	Longitude   *float64       `db:"longitude"    json:"longitude,omitempty"`

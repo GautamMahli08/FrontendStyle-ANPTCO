@@ -27,4 +27,9 @@ type TripRepository interface {
 	// For Mode A trips it also attempts to complete the linked order.
 	// Returns true when the transition occurred.
 	TryComplete(ctx context.Context, tripID uuid.UUID, orderID *uuid.UUID) (bool, error)
+
+	// GetActiveTripID returns the id of the truck's current non-terminal trip
+	// (status not COMPLETED/CANCELLED, most recently created), or nil if none.
+	// Used to tag newly detected asset_events with an unambiguous trip_id.
+	GetActiveTripID(ctx context.Context, truckID uuid.UUID) (*uuid.UUID, error)
 }

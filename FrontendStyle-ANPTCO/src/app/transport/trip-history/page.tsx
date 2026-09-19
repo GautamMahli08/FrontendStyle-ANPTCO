@@ -314,11 +314,18 @@ export default function TripHistoryPage() {
       && latestActiveTripIdByTruck.get(trip.truck_id) === trip.id;
     const end = isLatestActive ? Date.now() : new Date(trip.updated_at).getTime();
     return events
-      .filter(e =>
-        e.truck_id === trip.truck_id &&
-        new Date(e.occurred_at).getTime() >= start &&
-        new Date(e.occurred_at).getTime() <= end
-      )
+      .filter(e => {
+        if (e.truck_id !== trip.truck_id) return false;
+        // Events tagged with a real trip_id (backend now sets this on every
+        // asset_events insert) are unambiguous — trust it exactly, instead of
+        // guessing from overlapping trip time windows, which breaks down
+        // whenever two trips for the same truck overlap in time.
+        if (e.trip_id) return e.trip_id === trip.id;
+        // Legacy events recorded before trip_id existed fall back to the
+        // best-effort time-window heuristic.
+        const t = new Date(e.occurred_at).getTime();
+        return t >= start && t <= end;
+      })
       .sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
   }
 

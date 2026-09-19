@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/anptco/location-geofence-service/internal/repository"
@@ -98,4 +100,21 @@ func (r *tripRepository) TryComplete(ctx context.Context, tripID uuid.UUID, orde
 	}
 
 	return true, nil
+}
+
+func (r *tripRepository) GetActiveTripID(ctx context.Context, truckID uuid.UUID) (*uuid.UUID, error) {
+	q := fromCtx(ctx, r.db)
+	const query = `
+		SELECT id FROM trips
+		WHERE  truck_id = $1 AND status NOT IN ('COMPLETED', 'CANCELLED')
+		ORDER  BY created_at DESC
+		LIMIT  1`
+	var id uuid.UUID
+	if err := q.QueryRowContext(ctx, query, truckID).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("trip: get active trip for truck %s: %w", truckID, err)
+	}
+	return &id, nil
 }

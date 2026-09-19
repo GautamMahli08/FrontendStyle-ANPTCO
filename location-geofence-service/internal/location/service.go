@@ -21,6 +21,7 @@ type Service struct {
 	telemetry   repository.TelemetryRepository
 	liveState   repository.LiveStateRepository
 	assetEvents repository.AssetEventRepository
+	trips       repository.TripRepository
 	cache       *DeviceCache
 	log         *zap.Logger
 }
@@ -31,6 +32,7 @@ func NewService(
 	telemetry repository.TelemetryRepository,
 	liveState repository.LiveStateRepository,
 	assetEvents repository.AssetEventRepository,
+	trips repository.TripRepository,
 	cache *DeviceCache,
 	log *zap.Logger,
 ) *Service {
@@ -39,6 +41,7 @@ func NewService(
 		telemetry:   telemetry,
 		liveState:   liveState,
 		assetEvents: assetEvents,
+		trips:       trips,
 		cache:       cache,
 		log:         log,
 	}
@@ -92,6 +95,19 @@ func (s *Service) ProcessMessage(ctx context.Context, r *domain.TelemetryReading
 	// Detect and persist asset events only when the reading was fresh.
 	if updated {
 		detected := events.Detect(truck, prev, r, r.Timestamp)
+		if len(detected) > 0 {
+			// One lookup per message (not per event) — every event from this
+			// reading shares the same truck at the same moment, so they all
+			// belong to whichever trip is active right now, if any.
+			tripID, err := s.trips.GetActiveTripID(ctx, truck.ID)
+			if err != nil {
+				s.log.Error("get active trip for event tagging", zap.String("truck_id", truck.ID.String()), zap.Error(err))
+			} else {
+				for _, e := range detected {
+					e.TripID = tripID
+				}
+			}
+		}
 		for _, e := range detected {
 			if err := s.assetEvents.Insert(ctx, e); err != nil {
 				// Non-fatal: log and continue — the telemetry row is already written.

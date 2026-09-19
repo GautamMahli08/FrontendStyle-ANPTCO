@@ -47,6 +47,35 @@ func (m *mockLiveStateRepo) Upsert(ctx context.Context, s *domain.TruckLiveState
 	m.calls++
 	return m.upsertFn(ctx, s)
 }
+func (m *mockLiveStateRepo) Get(ctx context.Context, truckID uuid.UUID) (*domain.TruckLiveState, error) {
+	return nil, nil
+}
+
+type mockAssetEventRepo struct{ calls int }
+
+func (m *mockAssetEventRepo) Insert(ctx context.Context, e *domain.AssetEvent) error {
+	m.calls++
+	return nil
+}
+func (m *mockAssetEventRepo) ListByTruck(ctx context.Context, truckID uuid.UUID, limit int) ([]*domain.AssetEvent, error) {
+	return nil, nil
+}
+func (m *mockAssetEventRepo) ListByWorkspace(ctx context.Context, workspaceID uuid.UUID, limit int) ([]*domain.AssetEvent, error) {
+	return nil, nil
+}
+
+type mockTripRepo struct{}
+
+func (m *mockTripRepo) AdvanceToArrived(ctx context.Context, tripID uuid.UUID) error { return nil }
+func (m *mockTripRepo) CompleteAssignment(ctx context.Context, assignmentID *uuid.UUID, truckID uuid.UUID) error {
+	return nil
+}
+func (m *mockTripRepo) TryComplete(ctx context.Context, tripID uuid.UUID, orderID *uuid.UUID) (bool, error) {
+	return false, nil
+}
+func (m *mockTripRepo) GetActiveTripID(ctx context.Context, truckID uuid.UUID) (*uuid.UUID, error) {
+	return nil, nil
+}
 
 // ---- fixtures ----------------------------------------------------------------
 
@@ -70,7 +99,7 @@ var (
 )
 
 func newSvc(trucks *mockTruckRepo, telemetry *mockTelemetryRepo, live *mockLiveStateRepo) *Service {
-	return NewService(trucks, telemetry, live, NewDeviceCache(), zap.NewNop())
+	return NewService(trucks, telemetry, live, &mockAssetEventRepo{}, &mockTripRepo{}, NewDeviceCache(), zap.NewNop())
 }
 
 // ---- tests -------------------------------------------------------------------

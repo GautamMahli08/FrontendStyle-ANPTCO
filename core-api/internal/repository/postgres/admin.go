@@ -505,7 +505,7 @@ func (r *adminRepo) ListUnifiedFeed(ctx context.Context, workspaceID uuid.UUID, 
 		       value_before, value_after,
 		       NULL::text   AS geofence_type,
 		       NULL::text   AS geofence_zone,
-		       NULL::uuid   AS trip_id,
+		       trip_id,
 		       occurred_at, created_at
 		FROM   asset_events
 		WHERE  workspace_id = $1

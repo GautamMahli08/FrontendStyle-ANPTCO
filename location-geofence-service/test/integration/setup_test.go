@@ -130,13 +130,14 @@ func buildStack(db *sqlx.DB) *ingestion.Service {
 	truckRepo := pgrepo.NewTruckRepository(db)
 	telemetryRepo := pgrepo.NewTelemetryRepository(db)
 	liveStateRepo := pgrepo.NewLiveStateRepository(db)
+	assetEventRepo := pgrepo.NewAssetEventRepository(db)
 	geofenceRepo := pgrepo.NewGeofenceRepository(db)
 	eventRepo := pgrepo.NewGeofenceEventRepository(db)
 	tripRepo := pgrepo.NewTripRepository(db)
 	tx := pgrepo.NewTransactor(db)
 
 	cache := location.NewDeviceCache()
-	locSvc := location.NewService(truckRepo, telemetryRepo, liveStateRepo, cache, log)
+	locSvc := location.NewService(truckRepo, telemetryRepo, liveStateRepo, assetEventRepo, tripRepo, cache, log)
 	geoSvc := geofence.NewService(geofenceRepo, eventRepo, tripRepo, tx, log, 100, 200, notify.NoopNotifier{})
 
 	return ingestion.NewService(locSvc, geoSvc, log)

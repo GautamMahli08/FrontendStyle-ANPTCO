@@ -22,12 +22,12 @@ func (r *assetEventRepository) Insert(ctx context.Context, e *domain.AssetEvent)
 	}
 	const q = `
 		INSERT INTO asset_events
-			(id, truck_id, workspace_id, event_type, latitude, longitude,
+			(id, truck_id, workspace_id, trip_id, event_type, latitude, longitude,
 			 value_before, value_after, occurred_at)
 		VALUES
-			($1,$2,$3,$4,$5,$6,$7,$8,$9)`
+			($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	if _, err := r.db.ExecContext(ctx, q,
-		e.ID, e.TruckID, e.WorkspaceID, e.EventType,
+		e.ID, e.TruckID, e.WorkspaceID, e.TripID, e.EventType,
 		e.Latitude, e.Longitude,
 		e.ValueBefore, e.ValueAfter,
 		e.OccurredAt,
@@ -42,7 +42,7 @@ func (r *assetEventRepository) ListByTruck(ctx context.Context, truckID uuid.UUI
 		limit = 100
 	}
 	const q = `
-		SELECT id, truck_id, workspace_id, event_type, latitude, longitude,
+		SELECT id, truck_id, workspace_id, trip_id, event_type, latitude, longitude,
 		       value_before, value_after, occurred_at, created_at
 		FROM   asset_events
 		WHERE  truck_id = $1
@@ -60,7 +60,7 @@ func (r *assetEventRepository) ListByWorkspace(ctx context.Context, workspaceID 
 		limit = 200
 	}
 	const q = `
-		SELECT id, truck_id, workspace_id, event_type, latitude, longitude,
+		SELECT id, truck_id, workspace_id, trip_id, event_type, latitude, longitude,
 		       value_before, value_after, occurred_at, created_at
 		FROM   asset_events
 		WHERE  workspace_id = $1
