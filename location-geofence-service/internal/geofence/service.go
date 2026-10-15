@@ -77,7 +77,7 @@ type EvalContext struct {
 // truck_live_state (i.e. it is not stale).
 // Returns an EvalContext describing current geofence membership so the
 // monitoring subsystem can make context-aware alert decisions.
-func (s *Service) EvaluateReading(ctx context.Context, truck *domain.Truck, lat, lon float64, ts time.Time) (*EvalContext, error) {
+func (s *Service) EvaluateReading(ctx context.Context, truck *domain.Truck, lat, lon float64, ts time.Time, fuelLiters *float64) (*EvalContext, error) {
 	trip, err := s.geofences.FindActiveTripForTruck(ctx, truck.ID)
 	if err != nil {
 		return nil, fmt.Errorf("find active trip: %w", err)
@@ -110,7 +110,7 @@ func (s *Service) EvaluateReading(ctx context.Context, truck *domain.Truck, lat,
 			Longitude:    trip.DestLon,
 			RadiusMeters: destRadius,
 		}
-		inside, err := s.evaluateZone(ctx, truck, trip, lat, lon, ts, stationFence)
+		inside, err := s.evaluateZone(ctx, truck, trip, lat, lon, ts, fuelLiters, stationFence)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate station zone: %w", err)
 		}
@@ -126,7 +126,7 @@ func (s *Service) EvaluateReading(ctx context.Context, truck *domain.Truck, lat,
 		if depot.RadiusMeters == 0 {
 			depot.RadiusMeters = int(s.depotRadiusM)
 		}
-		inside, err := s.evaluateZone(ctx, truck, trip, lat, lon, ts, depot)
+		inside, err := s.evaluateZone(ctx, truck, trip, lat, lon, ts, fuelLiters, depot)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate depot zone: %w", err)
 		}
@@ -147,6 +147,7 @@ func (s *Service) evaluateZone(
 	trip *domain.ActiveTrip,
 	lat, lon float64,
 	ts time.Time,
+	fuelLiters *float64,
 	fence *domain.Geofence,
 ) (bool, error) {
 	radius := float64(fence.RadiusMeters)
@@ -168,7 +169,7 @@ func (s *Service) evaluateZone(
 		return insideNow, nil // no transition — already in the same state
 	}
 
-	evt := buildEvent(truck, trip, fence, evtType, lat, lon, ts)
+	evt := buildEvent(truck, trip, fence, evtType, lat, lon, ts, fuelLiters)
 
 	// Capture what the state machine did so we can notify after commit.
 	var pending *pendingNotification
@@ -353,6 +354,7 @@ func buildEvent(
 	evtType domain.EventType,
 	lat, lon float64,
 	ts time.Time,
+	fuelLiters *float64,
 ) *domain.GeofenceEvent {
 	evt := &domain.GeofenceEvent{
 		ID:           uuid.New(),
@@ -363,6 +365,7 @@ func buildEvent(
 		EventType:    evtType,
 		Latitude:     &lat,
 		Longitude:    &lon,
+		FuelLiters:   fuelLiters,
 		OccurredAt:   ts,
 	}
 	if trip != nil {

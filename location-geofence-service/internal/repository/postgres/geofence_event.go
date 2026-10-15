@@ -22,12 +22,12 @@ func (r *geofenceEventRepository) Insert(ctx context.Context, evt *domain.Geofen
 	const q = `
 		INSERT INTO geofence_events (
 			workspace_id, truck_id, trip_id, order_id, geofence_id,
-			geofence_type, event_type, latitude, longitude, occurred_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+			geofence_type, event_type, latitude, longitude, fuel_level, occurred_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 
 	_, err := fromCtx(ctx, r.db).ExecContext(ctx, q,
 		evt.WorkspaceID, evt.TruckID, evt.TripID, evt.OrderID, evt.GeofenceID,
-		evt.GeofenceType, evt.EventType, evt.Latitude, evt.Longitude, evt.OccurredAt,
+		evt.GeofenceType, evt.EventType, evt.Latitude, evt.Longitude, evt.FuelLiters, evt.OccurredAt,
 	)
 	if err != nil {
 		return fmt.Errorf("geofence_event: insert for truck %s: %w", evt.TruckID, err)

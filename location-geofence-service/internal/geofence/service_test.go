@@ -195,7 +195,7 @@ func TestEvaluateReading_NoOrderNoDepot_NoEvents(t *testing.T) {
 	svc := newGeoSvc(&mockGeofenceRepo{}, events, &mockTripRepo{})
 
 	// Truck inside the station area, but no active trip → nothing evaluated.
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, events.calls)
 }
@@ -213,7 +213,7 @@ func TestEvaluateReading_NoTransition_AlreadyInside(t *testing.T) {
 	svc := newGeoSvc(gr, events, &mockTripRepo{})
 
 	// Reading still inside the station zone → no transition.
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, events.calls, "no event when state does not change")
 }
@@ -233,7 +233,7 @@ func TestEvaluateReading_StationEnter_AdvancesOrderToArrived(t *testing.T) {
 	svc := newGeoSvc(gr, events, trips)
 
 	// Reading exactly at the station centre → inside.
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, events.calls, "one ENTER event should be emitted")
@@ -259,7 +259,7 @@ func TestEvaluateReading_StationEnter_WrongOrderStatus_NoAdvance(t *testing.T) {
 	}
 	svc := newGeoSvc(gr, events, trips)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, events.calls, "ENTER event is still emitted regardless of trip status")
@@ -281,7 +281,7 @@ func TestEvaluateReading_StationExit_NoOrderEffect(t *testing.T) {
 	svc := newGeoSvc(gr, events, trips)
 
 	// Reading 5 km from station → outside.
-	err := svc.EvaluateReading(context.Background(), gTruck, 55.80, 38.00, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, 55.80, 38.00, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, events.calls)
@@ -314,7 +314,7 @@ func TestEvaluateReading_DepotEnter_CompleteAssignment(t *testing.T) {
 	svc := newGeoSvc(gr, events, trips)
 
 	// Truck arrives at depot coordinates.
-	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, events.calls, "one ENTER(DEPOT) event")
@@ -343,7 +343,7 @@ func TestEvaluateReading_DepotEnter_AllDone_OrderCompleted(t *testing.T) {
 	}
 	svc := newGeoSvc(gr, &mockEventRepo{}, trips)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, trips.completeCalls)
 }
@@ -369,7 +369,7 @@ func TestEvaluateReading_DepotEnter_WrongStatus_EventEmittedNoCompletion(t *test
 	}
 	svc := newGeoSvc(gr, events, trips)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, events.calls, "depot ENTER event must still be emitted")
@@ -397,7 +397,7 @@ func TestEvaluateReading_DepotEnter_NoActiveOrder_EventEmittedNoOrderEffect(t *t
 	}
 	svc := newGeoSvc(gr, events, trips)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, events.calls, "depot ENTER must fire even with no active trip")
@@ -425,7 +425,7 @@ func TestEvaluateReading_NoDepotConfigured_OnlyStationEvaluated(t *testing.T) {
 	}
 	svc := newGeoSvc(gr, events, trips)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, events.calls, "only station ENTER fires")
@@ -466,7 +466,7 @@ func TestEvaluateReading_DepotRadiusEnvOverride(t *testing.T) {
 
 	// ~100 m north of depot centre: outside 50 m DB radius, inside 200 m env radius.
 	lat100mNorth := gDepot.Latitude + 0.0009
-	err := svc.EvaluateReading(context.Background(), gTruck, lat100mNorth, gDepot.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, lat100mNorth, gDepot.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, events.calls, "env radius (200 m) overrides DB radius (50 m); truck is inside")
@@ -488,7 +488,7 @@ func TestEvaluateReading_GetStateError_Propagated(t *testing.T) {
 	}
 	svc := newGeoSvc(gr, &mockEventRepo{}, &mockTripRepo{})
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	assert.ErrorIs(t, err, stateErr, "GetState error must propagate")
 }
 
@@ -516,7 +516,7 @@ func TestEvaluateReading_TryCompleteError_Propagated(t *testing.T) {
 	}
 	svc := newGeoSvc(gr, &mockEventRepo{}, trips)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow, nil)
 	assert.ErrorIs(t, err, tryErr, "TryComplete error must propagate through the transaction")
 }
 
@@ -537,7 +537,7 @@ func TestEvaluateReading_SetStateError_TransactionRolledBack(t *testing.T) {
 	}
 	svc := newGeoSvc(gr, events, &mockTripRepo{})
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	assert.ErrorIs(t, err, setErr)
 	assert.Equal(t, 0, events.calls, "event must not be inserted when SetState fails")
 }
@@ -556,7 +556,7 @@ func TestEvaluateReading_EventInsertError_Propagated(t *testing.T) {
 	}
 	svc := newGeoSvc(gr, events, &mockTripRepo{})
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	assert.ErrorIs(t, err, insertErr)
 }
 
@@ -570,7 +570,7 @@ func TestEvaluateReading_EventOrderIDSet_WhenOrderPresent(t *testing.T) {
 	}
 	svc := newGeoSvc(gr, events, &mockTripRepo{})
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	require.NotNil(t, events.last.OrderID, "order_id should be set when truck is on a Mode A trip")
@@ -587,7 +587,7 @@ func TestEvaluateReading_StationEnter_PublishesOrderArrivedNotification(t *testi
 	}
 	svc := newGeoSvcWithNotifier(gr, &mockEventRepo{}, &mockTripRepo{}, notifier)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	require.Len(t, notifier.arrived, 1, "OrderArrived should fire once")
@@ -616,7 +616,7 @@ func TestEvaluateReading_DepotEnter_AllDone_PublishesOrderCompletedNotification(
 	}
 	svc := newGeoSvcWithNotifier(gr, &mockEventRepo{}, trips, notifier)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	require.Len(t, notifier.completed, 1, "OrderCompleted should fire once")
@@ -646,7 +646,7 @@ func TestEvaluateReading_DepotEnter_NotAllDone_NoCompletedNotification(t *testin
 	}
 	svc := newGeoSvcWithNotifier(gr, &mockEventRepo{}, trips, notifier)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gDepot.Latitude, gDepot.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Empty(t, notifier.completed, "OrderCompleted must NOT fire while other trucks are still active")
@@ -663,7 +663,7 @@ func TestEvaluateReading_EventOccurredAtMatchesDeviceTimestamp(t *testing.T) {
 	svc := newGeoSvc(gr, events, &mockTripRepo{})
 
 	ts := time.Date(2026, 6, 15, 8, 30, 0, 0, time.UTC)
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, ts)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, ts, nil)
 	require.NoError(t, err)
 	assert.Equal(t, ts, events.last.OccurredAt, "occurred_at must equal device timestamp")
 }
@@ -696,7 +696,7 @@ func TestEvaluateReading_ModeBTrip_NoOrderID(t *testing.T) {
 	}
 	svc := newGeoSvcWithNotifier(gr, events, trips, notifier)
 
-	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow)
+	err := svc.EvaluateReading(context.Background(), gTruck, gStation.Latitude, gStation.Longitude, gNow, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, events.calls)

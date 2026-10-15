@@ -18,7 +18,20 @@ type messageProcessor interface {
 
 // geofenceEvaluator is satisfied by *geofence.Service.
 type geofenceEvaluator interface {
-	EvaluateReading(ctx context.Context, truck *domain.Truck, lat, lon float64, ts time.Time) (*geofence.EvalContext, error)
+	EvaluateReading(ctx context.Context, truck *domain.Truck, lat, lon float64, ts time.Time, fuelLiters *float64) (*geofence.EvalContext, error)
+}
+
+// fuelFromReading returns the best available fuel level on a reading
+// (total first, else the first compartment sensor), for snapshotting onto
+// geofence ENTER/EXIT events. Mirrors events.fuelLevel's preference order.
+func fuelFromReading(r *domain.TelemetryReading) *float64 {
+	if r.TotalFuelLiters != nil {
+		return r.TotalFuelLiters
+	}
+	for _, v := range r.CompartmentFuel {
+		return &v
+	}
+	return nil
 }
 
 // monitoringProcessor is satisfied by *monitoring.Service.
@@ -79,6 +92,7 @@ func (s *Service) ProcessBatch(ctx context.Context, readings []*domain.Telemetry
 				locResult.Truck,
 				r.Latitude, r.Longitude,
 				r.Timestamp,
+				fuelFromReading(r),
 			)
 			if err != nil {
 				return nil, err

@@ -900,10 +900,18 @@ export default function TripHistoryPage() {
               const displayEvs    = evs.filter(e => e.event_type !== 'MOVEMENT_START');
               const departureEv   = evs.find(e => e.event_type === 'GEOFENCE_EXIT_DEPOT');
               const arrivalEv     = evs.find(e => e.event_type === 'GEOFENCE_ENTER_STATION');
+              const leftDestEv    = evs.find(e => e.event_type === 'GEOFENCE_EXIT_STATION');
               const departureTime = departureEv?.occurred_at ?? selectedTrip.created_at;
               const hasArrived    = ['ARRIVED','DELIVERY_ACCEPTED','COMPLETED'].includes(selectedTrip.status);
               const arrivalTime   = arrivalEv?.occurred_at ?? (hasArrived ? tripEffectiveEnd(selectedTrip) : null);
               const tripNum       = tripNumber(selectedTrip.id);
+
+              // Fuel level at the moment the truck entered vs left the destination
+              // geofence — lets the manager see what was discharged during the stop.
+              const fuelAtArrival   = arrivalEv?.value_after ?? null;
+              const fuelAtDeparture = leftDestEv?.value_after ?? null;
+              const destFuelDelta   = fuelAtArrival != null && fuelAtDeparture != null
+                ? fuelAtDeparture - fuelAtArrival : null;
 
               async function printTripPDF() {
                 const stopDurOf = (ev: ApiAssetEvent) => {
@@ -988,10 +996,13 @@ export default function TripHistoryPage() {
                   const isStop     = ev.event_type === 'MOVEMENT_STOP';
                   const isCritical = ['FUEL_THEFT','BATTERY_OFF'].includes(ev.event_type);
                   const isFuel     = ['FUEL_FILL','FUEL_DRAIN','FUEL_THEFT'].includes(ev.event_type);
+                  const isDestFuelSnapshot = ['GEOFENCE_ENTER_STATION','GEOFENCE_EXIT_STATION'].includes(ev.event_type) && ev.value_after != null;
                   const delta      = ev.value_before != null && ev.value_after != null ? ev.value_after - ev.value_before : null;
                   const detail     = isStop && stopDurOf(ev) ? `Stopped ${stopDurOf(ev)}` : (ev.geofence_zone ?? '');
                   const fuelStr    = isFuel && delta != null
                     ? `${delta > 0 ? '+' : ''}${delta.toFixed(1)} L → ${ev.value_after!.toFixed(1)} L`
+                    : isDestFuelSnapshot
+                    ? `${ev.value_after!.toFixed(1)} L`
                     : '';
                   const dotColor   = eventColor(ev.event_type);
                   const rowBg      = isCritical ? '#fff5f5' : isStop ? '#fffbeb' : 'transparent';
@@ -1092,6 +1103,11 @@ export default function TripHistoryPage() {
                     <span>No fuel sensor events recorded for this trip.</span>
                     ${pdfLiveFuel != null ? `<span style="font-size:13px;font-weight:700;color:#1d4ed8">⛽ ${pdfLiveFuel.toFixed(1)} L</span>` : ''}
                   </div>`}
+                  ${(fuelAtArrival != null || fuelAtDeparture != null) ? `<div class="fuel-row" style="margin-top:-6px">
+                    <div class="fuel-box" style="border-color:#bae6fd;background:#f0f9ff"><div class="fuel-box-label" style="color:#0369a1">Arrived With</div><div class="fuel-box-val" style="color:#0c4a6e">${fuelAtArrival != null ? fuelAtArrival.toFixed(1) + ' L' : '—'}</div></div>
+                    <div class="fuel-box" style="border-color:#bae6fd;background:#f0f9ff"><div class="fuel-box-label" style="color:#0369a1">Departed With</div><div class="fuel-box-val" style="color:#0c4a6e">${fuelAtDeparture != null ? fuelAtDeparture.toFixed(1) + ' L' : '—'}</div></div>
+                    <div class="fuel-box ${destFuelDelta != null && destFuelDelta < 0 ? 'red' : destFuelDelta != null && destFuelDelta > 0 ? 'green' : ''}"><div class="fuel-box-label">Discharged at Destination</div><div class="fuel-box-val">${destFuelDelta != null ? `${destFuelDelta > 0 ? '+' : ''}${destFuelDelta.toFixed(1)} L` : 'Pending'}</div></div>
+                  </div>` : ''}
                   ${hasMap ? `
                   <div id="map"></div>
                   <div class="legend">
@@ -1279,6 +1295,7 @@ export default function TripHistoryPage() {
                       const isStop     = ev.event_type === 'MOVEMENT_STOP';
                       const isCritical = ev.event_type === 'FUEL_THEFT';
                       const isFuel     = ['FUEL_FILL','FUEL_DRAIN','FUEL_THEFT'].includes(ev.event_type);
+                      const isDestFuelSnapshot = ['GEOFENCE_ENTER_STATION','GEOFENCE_EXIT_STATION'].includes(ev.event_type) && ev.value_after != null;
                       const isLast     = i === displayEvs.length - 1;
                       const delta      = ev.value_before != null && ev.value_after != null
                         ? ev.value_after - ev.value_before : null;
@@ -1338,6 +1355,9 @@ export default function TripHistoryPage() {
                                 )}
                               </>
                             )}
+                            {isDestFuelSnapshot && (
+                              <p className="text-[10px] text-slate-500 mt-0">Tank: {ev.value_after!.toFixed(1)} L</p>
+                            )}
                           </div>
                         </div>
                       );
@@ -1360,6 +1380,31 @@ export default function TripHistoryPage() {
                         {selectedTrip.status === 'CANCELLED' && <p className="text-[10px] text-red-400 italic">Superseded by a later dispatch</p>}
                       </div>
                     </div>
+
+                    {/* ── Fuel at destination ── */}
+                    {(fuelAtArrival != null || fuelAtDeparture != null) && (
+                      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Fuel at Destination</p>
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-slate-500">Arrived with</span>
+                          <span className="font-mono font-semibold text-slate-700">
+                            {fuelAtArrival != null ? `${fuelAtArrival.toFixed(1)} L` : '—'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] mt-0.5">
+                          <span className="text-slate-500">Departed with</span>
+                          <span className="font-mono font-semibold text-slate-700">
+                            {fuelAtDeparture != null ? `${fuelAtDeparture.toFixed(1)} L` : '—'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] mt-1 pt-1 border-t border-slate-200">
+                          <span className="text-slate-600 font-semibold">Difference</span>
+                          <span className={`font-mono font-bold ${destFuelDelta == null ? 'text-slate-400' : destFuelDelta < 0 ? 'text-red-600' : destFuelDelta > 0 ? 'text-green-600' : 'text-slate-500'}`}>
+                            {destFuelDelta != null ? `${destFuelDelta > 0 ? '+' : ''}${destFuelDelta.toFixed(1)} L` : 'Pending departure'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
 
                   </div>
                 </div>

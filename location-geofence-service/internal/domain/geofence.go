@@ -49,6 +49,7 @@ type GeofenceEvent struct {
 	EventType    EventType    `db:"event_type"`
 	Latitude     *float64     `db:"latitude"`
 	Longitude    *float64     `db:"longitude"`
+	FuelLiters   *float64     `db:"fuel_level"` // fuel level snapshot at the moment of this transition, nil for pre-migration-039 rows
 	OccurredAt   time.Time    `db:"occurred_at"`
 	CreatedAt    time.Time    `db:"created_at"`
 }
